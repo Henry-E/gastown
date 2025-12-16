@@ -627,6 +627,173 @@ export BEADS_NO_DAEMON=1
 
 **See also**: beads docs/WORKTREES.md and docs/DAEMON.md for details.
 
+### 11. Beads as Swarm State (No Separate Database)
+
+**Decision**: Swarm state is encoded in beads epics and issues, not a separate SQLite database.
+
+**Rationale**:
+- **No new infrastructure**: Beads already provides hierarchy, dependencies, status, priority
+- **Shared state**: All rig agents share the same `.beads/` via BEADS_DIR
+- **Queryable**: `bd ready` finds work with no blockers, enabling multi-wave orchestration
+- **Auditable**: Beads history shows swarm progression
+- **Resilient**: Beads sync handles multi-agent conflicts
+
+**How it works**:
+- Swarm creation files a parent epic with child issues for each task
+- Dependencies encode ordering (task B depends on task A)
+- Status transitions track progress (open → in_progress → closed)
+- Witness queries `bd ready` to find next available work
+- Swarm completion = all child issues closed
+
+**Example**: Instead of `<rig>/swarms/<id>/manifest.json`:
+```
+bd-swarm-xyz              # Epic: "Swarm: Fix authentication bugs"
+├── bd-swarm-xyz.1        # "Fix login timeout" (ready, no deps)
+├── bd-swarm-xyz.2        # "Fix session expiry" (ready, no deps)
+└── bd-swarm-xyz.3        # "Update auth tests" (blocked by .1 and .2)
+```
+
+### 12. Agent Session Lifecycle (Daemon Protection)
+
+**Decision**: A background daemon manages agent session lifecycles, including cycling sessions when agents request handoff.
+
+**Rationale**:
+- Agents can't restart themselves after exiting
+- Handoff mail is useless without someone to start the new session
+- Daemon provides reliable session management outside agent context
+- Enables autonomous long-running operation (hours/days)
+
+**Session cycling protocol**:
+1. Agent detects context exhaustion or requests cycle
+2. Agent sends handoff mail to own inbox
+3. Agent sets `requesting_cycle: true` in state.json
+4. Agent exits (or sends explicit signal to daemon)
+5. Daemon detects exit + cycle request flag
+6. Daemon starts new session
+7. New session reads handoff mail, resumes work
+
+**Daemon responsibilities**:
+- Monitor agent session health (heartbeat)
+- Detect session exit
+- Check cycle request flag in state.json
+- Start replacement session if cycle requested
+- Clear cycle flag after successful restart
+- Report failures to Mayor (escalation)
+
+**Applies to**: Witness, Refinery (both long-running agents that may exhaust context)
+
+```mermaid
+sequenceDiagram
+    participant A1 as Agent Session 1
+    participant S as State.json
+    participant D as Daemon
+    participant A2 as Agent Session 2
+    participant MB as Mailbox
+
+    A1->>MB: Send handoff mail
+    A1->>S: Set requesting_cycle: true
+    A1->>A1: Exit cleanly
+    D->>D: Detect session exit
+    D->>S: Check requesting_cycle
+    S->>D: true
+    D->>D: Start new session
+    D->>S: Clear requesting_cycle
+    A2->>MB: Read handoff mail
+    A2->>A2: Resume from handoff
+```
+
+### 13. Resource-Constrained Worker Pool
+
+**Decision**: Each rig has a configurable `max_workers` limit for concurrent polecats.
+
+**Rationale**:
+- Claude Code can use 500MB+ RAM per session
+- Prevents resource exhaustion on smaller machines
+- Enables autonomous operation without human oversight
+- Witness respects limit when spawning new workers
+
+**Configuration** (in rig config.json):
+```json
+{
+  "type": "rig",
+  "max_workers": 8,
+  "worker_spawn_delay": "5s"
+}
+```
+
+**Witness behavior**:
+- Query active worker count before spawning
+- If at limit, wait for workers to complete
+- Prioritize higher-priority ready issues
+
+## Multi-Wave Swarms
+
+For large task trees (like implementing GGT itself), swarms can process multiple "waves" of work automatically.
+
+### Wave Orchestration
+
+A wave is not explicitly managed - it emerges from the dependency graph:
+
+1. **Wave 1**: All issues with no dependencies (`bd ready`)
+2. **Wave 2**: Issues whose dependencies are now closed
+3. **Wave N**: Continue until epic is complete
+
+```mermaid
+graph TD
+    subgraph "Wave 1 (no dependencies)"
+        A[Task A]
+        B[Task B]
+        C[Task C]
+    end
+
+    subgraph "Wave 2 (depends on Wave 1)"
+        D[Task D]
+        E[Task E]
+    end
+
+    subgraph "Wave 3 (depends on Wave 2)"
+        F[Task F]
+    end
+
+    A --> D
+    B --> D
+    C --> E
+    D --> F
+    E --> F
+```
+
+### Witness Multi-Wave Loop
+
+```
+while epic has open issues:
+    ready_issues = bd ready --parent <epic-id>
+
+    if ready_issues is empty and workers_active:
+        wait for worker completion
+        continue
+
+    for issue in ready_issues:
+        if active_workers < max_workers:
+            spawn worker for issue
+        else:
+            break  # wait for capacity
+
+    monitor workers, handle completions
+
+epic complete - initiate landing
+```
+
+### Long-Running Autonomy
+
+With daemon session cycling, the system can run autonomously for extended periods:
+
+- **Witness cycles**: Every few hours as context fills
+- **Refinery cycles**: As merge queue grows complex
+- **Workers cycle**: If individual tasks are very large
+- **Daemon persistence**: Survives all agent restarts
+
+The daemon is the only truly persistent component. All agents are ephemeral sessions that hand off state via mail.
+
 ## Configuration
 
 ### town.json
