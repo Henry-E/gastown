@@ -91,6 +91,12 @@ func (g *Git) Fetch(remote string) error {
 	return err
 }
 
+// FetchBranch fetches a specific branch from the remote.
+func (g *Git) FetchBranch(remote, branch string) error {
+	_, err := g.run("fetch", remote, branch)
+	return err
+}
+
 // Pull pulls from the remote branch.
 func (g *Git) Pull(remote, branch string) error {
 	_, err := g.run("pull", remote, branch)
@@ -205,6 +211,95 @@ func (g *Git) Rebase(onto string) error {
 func (g *Git) AbortMerge() error {
 	_, err := g.run("merge", "--abort")
 	return err
+}
+
+// CheckConflicts performs a test merge to check if source can be merged into target
+// without conflicts. Returns a list of conflicting files, or empty slice if clean.
+// The merge is always aborted after checking - no actual changes are made.
+//
+// The caller must ensure the working directory is clean before calling this.
+// After return, the working directory is restored to the target branch.
+func (g *Git) CheckConflicts(source, target string) ([]string, error) {
+	// Checkout the target branch
+	if err := g.Checkout(target); err != nil {
+		return nil, fmt.Errorf("checkout target %s: %w", target, err)
+	}
+
+	// Attempt test merge with --no-commit --no-ff
+	// We need to capture both stdout and stderr to detect conflicts
+	_, mergeErr := g.runMergeCheck("merge", "--no-commit", "--no-ff", source)
+
+	if mergeErr != nil {
+		// Check if there are unmerged files (indicates conflict)
+		conflicts, err := g.getConflictingFiles()
+		if err == nil && len(conflicts) > 0 {
+			// Abort the test merge
+			g.AbortMerge()
+			return conflicts, nil
+		}
+
+		// Check if it's a conflict error from wrapper
+		if errors.Is(mergeErr, ErrMergeConflict) {
+			g.AbortMerge()
+			return conflicts, nil
+		}
+
+		// Some other merge error
+		g.AbortMerge()
+		return nil, mergeErr
+	}
+
+	// Merge succeeded (no conflicts) - abort the test merge
+	// Use reset since --abort won't work on successful merge
+	g.run("reset", "--hard", "HEAD")
+	return nil, nil
+}
+
+// runMergeCheck runs a git merge command and returns error info from both stdout and stderr.
+// This is needed because git merge outputs CONFLICT info to stdout.
+func (g *Git) runMergeCheck(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = g.workDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		// Check stdout for CONFLICT message (git sends it there)
+		stdoutStr := stdout.String()
+		if strings.Contains(stdoutStr, "CONFLICT") {
+			return "", ErrMergeConflict
+		}
+		// Fall back to stderr check
+		return "", g.wrapError(err, stderr.String(), args)
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// getConflictingFiles returns the list of files with merge conflicts.
+func (g *Git) getConflictingFiles() ([]string, error) {
+	// git diff --name-only --diff-filter=U shows unmerged files
+	out, err := g.run("diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+
+	if out == "" {
+		return nil, nil
+	}
+
+	files := strings.Split(out, "\n")
+	// Filter out empty strings
+	var result []string
+	for _, f := range files {
+		if f != "" {
+			result = append(result, f)
+		}
+	}
+	return result, nil
 }
 
 // AbortRebase aborts a rebase in progress.

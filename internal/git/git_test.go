@@ -186,3 +186,157 @@ func TestRev(t *testing.T) {
 		t.Errorf("hash length = %d, want 40", len(hash))
 	}
 }
+
+func TestFetchBranch(t *testing.T) {
+	// Create a "remote" repo
+	remoteDir := t.TempDir()
+	cmd := exec.Command("git", "init", "--bare")
+	cmd.Dir = remoteDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git init --bare: %v", err)
+	}
+
+	// Create a local repo and push to remote
+	localDir := initTestRepo(t)
+	g := NewGit(localDir)
+
+	// Add remote
+	cmd = exec.Command("git", "remote", "add", "origin", remoteDir)
+	cmd.Dir = localDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git remote add: %v", err)
+	}
+
+	// Push main branch
+	mainBranch, _ := g.CurrentBranch()
+	cmd = exec.Command("git", "push", "-u", "origin", mainBranch)
+	cmd.Dir = localDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git push: %v", err)
+	}
+
+	// Fetch should succeed
+	if err := g.FetchBranch("origin", mainBranch); err != nil {
+		t.Errorf("FetchBranch: %v", err)
+	}
+}
+
+func TestCheckConflicts_NoConflict(t *testing.T) {
+	dir := initTestRepo(t)
+	g := NewGit(dir)
+	mainBranch, _ := g.CurrentBranch()
+
+	// Create feature branch with non-conflicting change
+	if err := g.CreateBranch("feature"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := g.Checkout("feature"); err != nil {
+		t.Fatalf("Checkout feature: %v", err)
+	}
+
+	// Add a new file (won't conflict with main)
+	newFile := filepath.Join(dir, "feature.txt")
+	if err := os.WriteFile(newFile, []byte("feature content"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := g.Add("feature.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := g.Commit("add feature file"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Go back to main
+	if err := g.Checkout(mainBranch); err != nil {
+		t.Fatalf("Checkout main: %v", err)
+	}
+
+	// Check for conflicts - should be none
+	conflicts, err := g.CheckConflicts("feature", mainBranch)
+	if err != nil {
+		t.Fatalf("CheckConflicts: %v", err)
+	}
+	if len(conflicts) > 0 {
+		t.Errorf("expected no conflicts, got %v", conflicts)
+	}
+
+	// Verify we're still on main and clean
+	branch, _ := g.CurrentBranch()
+	if branch != mainBranch {
+		t.Errorf("branch = %q, want %q", branch, mainBranch)
+	}
+	status, _ := g.Status()
+	if !status.Clean {
+		t.Error("expected clean working directory after CheckConflicts")
+	}
+}
+
+func TestCheckConflicts_WithConflict(t *testing.T) {
+	dir := initTestRepo(t)
+	g := NewGit(dir)
+	mainBranch, _ := g.CurrentBranch()
+
+	// Create feature branch
+	if err := g.CreateBranch("feature"); err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if err := g.Checkout("feature"); err != nil {
+		t.Fatalf("Checkout feature: %v", err)
+	}
+
+	// Modify README.md on feature branch
+	readmeFile := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("# Feature changes\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := g.Add("README.md"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := g.Commit("modify readme on feature"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Go back to main and make conflicting change
+	if err := g.Checkout(mainBranch); err != nil {
+		t.Fatalf("Checkout main: %v", err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# Main changes\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := g.Add("README.md"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := g.Commit("modify readme on main"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Check for conflicts - should find README.md
+	conflicts, err := g.CheckConflicts("feature", mainBranch)
+	if err != nil {
+		t.Fatalf("CheckConflicts: %v", err)
+	}
+	if len(conflicts) == 0 {
+		t.Error("expected conflicts, got none")
+	}
+
+	foundReadme := false
+	for _, f := range conflicts {
+		if f == "README.md" {
+			foundReadme = true
+			break
+		}
+	}
+	if !foundReadme {
+		t.Errorf("expected README.md in conflicts, got %v", conflicts)
+	}
+
+	// Verify we're still on main and clean
+	branch, _ := g.CurrentBranch()
+	if branch != mainBranch {
+		t.Errorf("branch = %q, want %q", branch, mainBranch)
+	}
+	status, _ := g.Status()
+	if !status.Clean {
+		t.Error("expected clean working directory after CheckConflicts")
+	}
+}
