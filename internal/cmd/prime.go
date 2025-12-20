@@ -401,6 +401,16 @@ func outputStartupDirective(ctx RoleContext) {
 		fmt.Println("2. Check mail: `gt mail inbox`")
 		fmt.Println("3. If there's a 🤝 HANDOFF message, read it and summarize")
 		fmt.Println("4. If no mail, await user instruction")
+	case RoleWitness:
+		fmt.Println()
+		fmt.Println("---")
+		fmt.Println()
+		fmt.Println("**STARTUP PROTOCOL**: You are the Witness. Please:")
+		fmt.Println("1. Check for handoff: `gt mail inbox` - look for 🤝 HANDOFF messages")
+		fmt.Println("2. Check polecat status: `gt polecat list " + ctx.Rig + " --json`")
+		fmt.Println("3. Process any lifecycle requests from inbox")
+		fmt.Println("4. If polecats stuck/idle, nudge them")
+		fmt.Println("5. If all quiet, wait for activity")
 	case RolePolecat:
 		fmt.Println()
 		fmt.Println("---")

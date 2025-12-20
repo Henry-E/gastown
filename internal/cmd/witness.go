@@ -254,11 +254,17 @@ func runWitnessAttach(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking session: %w", err)
 	}
 
+	// Witness working directory - use <rig>/witness/ for proper role detection
+	witnessDir := filepath.Join(r.Path, "witness")
+	if err := os.MkdirAll(witnessDir, 0755); err != nil {
+		return fmt.Errorf("creating witness directory: %w", err)
+	}
+
 	if !running {
 		// Start witness session (like Mayor)
 		fmt.Printf("Starting witness session for %s...\n", rigName)
 
-		if err := t.NewSession(sessionName, r.Path); err != nil {
+		if err := t.NewSession(sessionName, witnessDir); err != nil {
 			return fmt.Errorf("creating session: %w", err)
 		}
 
