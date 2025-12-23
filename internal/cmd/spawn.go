@@ -371,32 +371,40 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 	// The Deacon will poll with WaitForClaudeReady and send a trigger when ready.
 	// The polecat's SessionStart hook runs gt prime, and work assignment is in its inbox.
 
-	// Notify Witness about the spawn for monitoring
+	// Notify Witness and Deacon about the spawn for monitoring
 	// Use town-level beads for cross-agent mail (gt-c6b: mail coordination uses town-level)
 	townRouter := mail.NewRouter(townRoot)
-	witnessAddr := fmt.Sprintf("%s/witness", rigName)
 	sender := detectSender()
 	sessionName := sessMgr.SessionName(polecatName)
-	spawnNotification := &mail.Message{
+
+	// Notify Witness with POLECAT_STARTED message
+	witnessAddr := fmt.Sprintf("%s/witness", rigName)
+	witnessNotification := &mail.Message{
 		To:      witnessAddr,
 		From:    sender,
-		Subject: fmt.Sprintf("SPAWN: %s starting on %s", polecatName, assignmentID),
-		Body: fmt.Sprintf(`Polecat spawn notification.
-
-Polecat: %s
-Issue: %s
-Session: %s
-Spawned by: %s
-
-The Deacon will trigger this polecat when Claude is ready (WaitForClaudeReady).
-The polecat's SessionStart hook runs gt prime, and work assignment is in its inbox.
-Monitor for stuck/idle state after a few minutes.`, polecatName, assignmentID, sessionName, sender),
+		Subject: fmt.Sprintf("POLECAT_STARTED %s", polecatName),
+		Body:    fmt.Sprintf("Issue: %s\nSession: %s", assignmentID, sessionName),
 	}
 
-	if err := townRouter.Send(spawnNotification); err != nil {
+	if err := townRouter.Send(witnessNotification); err != nil {
 		fmt.Printf("  %s\n", style.Dim.Render(fmt.Sprintf("Warning: could not notify witness: %v", err)))
 	} else {
-		fmt.Printf("  %s\n", style.Dim.Render("Witness notified to monitor startup"))
+		fmt.Printf("  %s\n", style.Dim.Render("Witness notified of polecat start"))
+	}
+
+	// Notify Deacon with POLECAT_STARTED message (includes full rig/polecat address)
+	deaconAddr := "deacon/"
+	deaconNotification := &mail.Message{
+		To:      deaconAddr,
+		From:    sender,
+		Subject: fmt.Sprintf("POLECAT_STARTED %s/%s", rigName, polecatName),
+		Body:    fmt.Sprintf("Issue: %s\nSession: %s", assignmentID, sessionName),
+	}
+
+	if err := townRouter.Send(deaconNotification); err != nil {
+		fmt.Printf("  %s\n", style.Dim.Render(fmt.Sprintf("Warning: could not notify deacon: %v", err)))
+	} else {
+		fmt.Printf("  %s\n", style.Dim.Render("Deacon notified of polecat start"))
 	}
 
 	return nil
