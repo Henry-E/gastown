@@ -32,6 +32,8 @@ var (
 	slingForce    bool   // Re-sling even if hook has work
 	slingNoStart  bool   // Assign work but don't start session
 	slingCreate   bool   // Create polecat if it doesn't exist
+	slingUrgent   bool   // Interrupt patrol cycle, process immediately
+	slingReplace  bool   // Replace patrol with discrete work (break-glass)
 )
 
 var slingCmd = &cobra.Command{
@@ -92,8 +94,102 @@ func init() {
 	slingCmd.Flags().BoolVar(&slingForce, "force", false, "Re-sling even if hook has work")
 	slingCmd.Flags().BoolVar(&slingNoStart, "no-start", false, "Assign work but don't start session")
 	slingCmd.Flags().BoolVar(&slingCreate, "create", false, "Create polecat if it doesn't exist")
+	slingCmd.Flags().BoolVar(&slingUrgent, "urgent", false, "Interrupt patrol cycle (patrol roles only)")
+	slingCmd.Flags().BoolVar(&slingReplace, "replace", false, "Replace patrol with discrete work (break-glass)")
 
 	rootCmd.AddCommand(slingCmd)
+}
+
+// isPatrolRole returns true if the target kind is a patrol-based agent.
+func isPatrolRole(kind string) bool {
+	switch kind {
+	case "witness", "refinery", "deacon":
+		return true
+	}
+	return false
+}
+
+// getDefaultPatrolMolecule returns the default patrol molecule title for a role.
+func getDefaultPatrolMolecule(role string) string {
+	switch role {
+	case "witness":
+		return "mol-witness-patrol"
+	case "refinery":
+		return "mol-refinery-patrol"
+	case "deacon":
+		return "mol-deacon-patrol"
+	}
+	return ""
+}
+
+// resolvePatrolMoleculeID looks up the beads issue ID for a patrol molecule by title.
+// Returns the issue ID (e.g., "gt-qflq") for the given molecule title (e.g., "mol-witness-patrol").
+func resolvePatrolMoleculeID(beadsPath, title string) (string, error) {
+	// Use bd list --title to find the issue ID
+	cmd := exec.Command("bd", "--no-daemon", "list", "--title="+title, "--json")
+	cmd.Dir = beadsPath
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = nil
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("looking up patrol molecule: %w", err)
+	}
+
+	// Parse JSON array of issues
+	var issues []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &issues); err != nil {
+		return "", fmt.Errorf("parsing patrol molecule lookup: %w", err)
+	}
+
+	if len(issues) == 0 {
+		return "", fmt.Errorf("patrol molecule not found: %s", title)
+	}
+
+	return issues[0].ID, nil
+}
+
+// isPatrolRunning checks if a patrol is currently attached to the agent's hook.
+func isPatrolRunning(beadsPath, agentAddress string) (bool, string) {
+	parts := strings.Split(agentAddress, "/")
+	var role string
+	if len(parts) >= 2 {
+		role = parts[len(parts)-1]
+	} else {
+		role = parts[0]
+	}
+
+	b := beads.New(beadsPath)
+	handoff, err := b.FindHandoffBead(role)
+	if err != nil || handoff == nil {
+		return false, ""
+	}
+
+	attachment := beads.ParseAttachmentFields(handoff)
+	if attachment == nil || attachment.AttachedMolecule == "" {
+		return false, ""
+	}
+
+	// Check if the attached molecule looks like a patrol
+	// Patrol molecules typically have "patrol" in the ID or are wisps
+	attachedID := attachment.AttachedMolecule
+	if strings.Contains(attachedID, "patrol") {
+		return true, attachedID
+	}
+
+	// Also check if it's the root of a patrol molecule by looking at the issue
+	issue, err := b.Show(attachedID)
+	if err == nil && issue != nil {
+		// Check title for patrol indication
+		if strings.Contains(strings.ToLower(issue.Title), "patrol") {
+			return true, attachedID
+		}
+	}
+
+	return false, ""
 }
 
 // SlingThing represents what's being slung.
@@ -546,44 +642,113 @@ func slingToPolecat(townRoot string, target *SlingTarget, thing *SlingThing) err
 
 // slingToDeacon handles slinging work to the deacon.
 func slingToDeacon(townRoot string, target *SlingTarget, thing *SlingThing) error {
-	if thing.Kind != "proto" {
-		return fmt.Errorf("deacon only accepts protos (like 'patrol'), not issues")
+	// Deacon uses town-level beads for now (could be rig-specific in future)
+	beadsPath := townRoot
+	deaconAddress := "deacon/"
+
+	// --replace flag: use legacy behavior (replace hook with discrete work)
+	if slingReplace {
+		if thing.Kind != "proto" {
+			return fmt.Errorf("deacon --replace only accepts protos, not issues")
+		}
+		fmt.Printf("%s Using --replace: patrol will be terminated\n", style.Warning.Render("⚠"))
+		return slingToPatrolWithReplace(townRoot, beadsPath, deaconAddress, thing, "deacon")
 	}
 
-	if !thing.IsWisp {
-		fmt.Printf("%s Deacon work should be ephemeral. Consider using --wisp\n",
-			style.Dim.Render("Note:"))
-	}
-
-	// For deacon, we just need to update its hook and send mail
-	beadsPath := filepath.Join(townRoot, target.Rig)
+	// Check if patrol is currently running
+	patrolRunning, patrolID := isPatrolRunning(beadsPath, deaconAddress)
 
 	// Sync beads
 	if err := syncBeads(beadsPath, true); err != nil {
 		fmt.Printf("%s beads sync: %v\n", style.Dim.Render("Warning:"), err)
 	}
 
-	// Spawn the molecule from proto
-	deaconAddress := fmt.Sprintf("%s/deacon", target.Rig)
-	issueID, moleculeCtx, err := spawnMoleculeFromProto(beadsPath, thing, deaconAddress)
-	if err != nil {
-		return err
+	// If no patrol running, start the default patrol first
+	if !patrolRunning {
+		patrolTitle := getDefaultPatrolMolecule("deacon")
+		fmt.Printf("No patrol running, starting %s...\n", patrolTitle)
+
+		// Resolve the patrol molecule title to its beads issue ID
+		patrolIssueID, err := resolvePatrolMoleculeID(beadsPath, patrolTitle)
+		if err != nil {
+			return fmt.Errorf("resolving patrol molecule: %w", err)
+		}
+
+		patrolThing := &SlingThing{
+			Kind:   "proto",
+			ID:     patrolIssueID, // Use the resolved beads issue ID
+			IsWisp: false,         // Templates are in main DB, spawn there for now
+		}
+		patrolID, _, err = spawnMoleculeFromProto(beadsPath, patrolThing, deaconAddress)
+		if err != nil {
+			return fmt.Errorf("starting patrol: %w", err)
+		}
+		if err := pinToHook(beadsPath, deaconAddress, patrolID, nil); err != nil {
+			return fmt.Errorf("pinning patrol to hook: %w", err)
+		}
+		fmt.Printf("%s Started deacon patrol\n", style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("Patrol running: %s\n", patrolID)
 	}
 
-	// Pin to deacon's hook
-	if err := pinToHook(beadsPath, deaconAddress, issueID, moleculeCtx); err != nil {
-		fmt.Printf("%s Could not pin to hook: %v\n", style.Dim.Render("Warning:"), err)
-	} else {
-		fmt.Printf("%s Pinned to deacon hook\n", style.Bold.Render("✓"))
+	// Now queue the work via mail (don't touch hook - patrol stays pinned)
+	router := mail.NewRouter(townRoot)
+
+	// Build work assignment mail
+	b := beads.New(beadsPath)
+	var beadsIssue *BeadsIssue
+	issueID := thing.ID
+
+	// For protos, we need to spawn the molecule but NOT pin it
+	var moleculeCtx *MoleculeContext
+	var err error
+	if thing.Kind == "proto" {
+		issueID, moleculeCtx, err = spawnMoleculeFromProto(beadsPath, thing, deaconAddress)
+		if err != nil {
+			return err
+		}
+	} else if thing.Kind == "issue" {
+		if thing.Proto != "" {
+			issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, deaconAddress)
+			if err != nil {
+				return err
+			}
+		}
+		// Issues without molecule proto are queued directly
 	}
+
+	issue, _ := b.Show(issueID)
+	if issue != nil {
+		beadsIssue = &BeadsIssue{
+			ID:          issue.ID,
+			Title:       issue.Title,
+			Description: issue.Description,
+			Priority:    issue.Priority,
+			Type:        issue.Type,
+			Status:      issue.Status,
+		}
+	}
+
+	workMsg := buildWorkAssignmentMail(beadsIssue, "", deaconAddress, moleculeCtx)
+	if slingUrgent {
+		workMsg.Subject = "🚨 URGENT: " + workMsg.Subject
+	}
+	if err := router.Send(workMsg); err != nil {
+		return fmt.Errorf("sending work assignment: %w", err)
+	}
+	fmt.Printf("%s Work assignment sent to %s\n", style.Bold.Render("✓"), deaconAddress)
 
 	// Sync beads
 	if err := syncBeads(beadsPath, false); err != nil {
 		fmt.Printf("%s beads push: %v\n", style.Dim.Render("Warning:"), err)
 	}
 
-	fmt.Printf("%s Deacon will run %s on next patrol\n",
-		style.Bold.Render("✓"), thing.ID)
+	if slingUrgent {
+		fmt.Printf("%s Queued as URGENT - will interrupt current patrol cycle\n",
+			style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("%s Queued for next patrol cycle\n", style.Bold.Render("✓"))
+	}
 
 	return nil
 }
@@ -687,18 +852,118 @@ func slingToWitness(townRoot string, target *SlingTarget, thing *SlingThing) err
 	beadsPath := filepath.Join(townRoot, target.Rig)
 	witnessAddress := fmt.Sprintf("%s/witness", target.Rig)
 
-	if !thing.IsWisp {
-		fmt.Printf("%s Witness work should be ephemeral. Consider using --wisp\n",
-			style.Dim.Render("Note:"))
+	// --replace flag: use legacy behavior (replace hook with discrete work)
+	if slingReplace {
+		fmt.Printf("%s Using --replace: patrol will be terminated\n", style.Warning.Render("⚠"))
+		return slingToPatrolWithReplace(townRoot, beadsPath, witnessAddress, thing, "witness")
 	}
 
+	// Check if patrol is currently running
+	patrolRunning, patrolID := isPatrolRunning(beadsPath, witnessAddress)
+
+	// Sync beads
+	if err := syncBeads(beadsPath, true); err != nil {
+		fmt.Printf("%s beads sync: %v\n", style.Dim.Render("Warning:"), err)
+	}
+
+	// If no patrol running, start the default patrol first
+	if !patrolRunning {
+		patrolTitle := getDefaultPatrolMolecule("witness")
+		fmt.Printf("No patrol running, starting %s...\n", patrolTitle)
+
+		// Resolve the patrol molecule title to its beads issue ID
+		patrolIssueID, err := resolvePatrolMoleculeID(beadsPath, patrolTitle)
+		if err != nil {
+			return fmt.Errorf("resolving patrol molecule: %w", err)
+		}
+
+		patrolThing := &SlingThing{
+			Kind:   "proto",
+			ID:     patrolIssueID, // Use the resolved beads issue ID
+			IsWisp: false,         // Templates are in main DB, spawn there for now
+		}
+		patrolID, _, err = spawnMoleculeFromProto(beadsPath, patrolThing, witnessAddress)
+		if err != nil {
+			return fmt.Errorf("starting patrol: %w", err)
+		}
+		if err := pinToHook(beadsPath, witnessAddress, patrolID, nil); err != nil {
+			return fmt.Errorf("pinning patrol to hook: %w", err)
+		}
+		fmt.Printf("%s Started witness patrol\n", style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("Patrol running: %s\n", patrolID)
+	}
+
+	// Now queue the work via mail (don't touch hook - patrol stays pinned)
+	router := mail.NewRouter(townRoot)
+
+	// Build work assignment mail
+	b := beads.New(beadsPath)
+	var beadsIssue *BeadsIssue
+	issueID := thing.ID
+
+	// For protos, we need to spawn the molecule but NOT pin it
+	var moleculeCtx *MoleculeContext
+	var err error
+	if thing.Kind == "proto" {
+		// Spawn molecule without pinning
+		issueID, moleculeCtx, err = spawnMoleculeFromProto(beadsPath, thing, witnessAddress)
+		if err != nil {
+			return err
+		}
+	} else if thing.Kind == "issue" && thing.Proto != "" {
+		issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, witnessAddress)
+		if err != nil {
+			return err
+		}
+	}
+
+	issue, _ := b.Show(issueID)
+	if issue != nil {
+		beadsIssue = &BeadsIssue{
+			ID:          issue.ID,
+			Title:       issue.Title,
+			Description: issue.Description,
+			Priority:    issue.Priority,
+			Type:        issue.Type,
+			Status:      issue.Status,
+		}
+	}
+
+	workMsg := buildWorkAssignmentMail(beadsIssue, "", witnessAddress, moleculeCtx)
+	if slingUrgent {
+		workMsg.Subject = "🚨 URGENT: " + workMsg.Subject
+	}
+	if err := router.Send(workMsg); err != nil {
+		return fmt.Errorf("sending work assignment: %w", err)
+	}
+	fmt.Printf("%s Work assignment sent to %s\n", style.Bold.Render("✓"), witnessAddress)
+
+	// Sync beads
+	if err := syncBeads(beadsPath, false); err != nil {
+		fmt.Printf("%s beads push: %v\n", style.Dim.Render("Warning:"), err)
+	}
+
+	if slingUrgent {
+		fmt.Printf("%s Queued as URGENT - will interrupt current patrol cycle\n",
+			style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("%s Queued for next patrol cycle\n", style.Bold.Render("✓"))
+	}
+
+	return nil
+}
+
+// slingToPatrolWithReplace implements legacy sling behavior for patrol roles.
+// Used when --replace flag is set to explicitly terminate patrol.
+func slingToPatrolWithReplace(townRoot, beadsPath, agentAddress string, thing *SlingThing, role string) error {
 	// Check for existing work on hook
-	displacedID, err := checkHookCollision(witnessAddress, beadsPath, slingForce)
+	displacedID, err := checkHookCollision(agentAddress, beadsPath, true) // force=true since we're replacing
 	if err != nil {
 		return err
 	}
 	if displacedID != "" {
-		fmt.Printf("%s Displaced %s back to ready pool\n", style.Warning.Render("⚠"), displacedID)
+		fmt.Printf("%s Displaced %s (patrol terminated)\n", style.Warning.Render("⚠"), displacedID)
 		if err := releaseDisplacedWork(beadsPath, displacedID); err != nil {
 			fmt.Printf("  %s could not release: %v\n", style.Dim.Render("Warning:"), err)
 		}
@@ -715,27 +980,27 @@ func slingToWitness(townRoot string, target *SlingTarget, thing *SlingThing) err
 
 	switch thing.Kind {
 	case "proto":
-		issueID, moleculeCtx, err = spawnMoleculeFromProto(beadsPath, thing, witnessAddress)
+		issueID, moleculeCtx, err = spawnMoleculeFromProto(beadsPath, thing, agentAddress)
 		if err != nil {
 			return err
 		}
 	case "issue":
 		issueID = thing.ID
 		if thing.Proto != "" {
-			issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, witnessAddress)
+			issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, agentAddress)
 			if err != nil {
 				return err
 			}
 		}
 	default:
-		return fmt.Errorf("witness accepts protos or issues, not %s", thing.Kind)
+		return fmt.Errorf("%s accepts protos or issues, not %s", role, thing.Kind)
 	}
 
-	// Pin to witness hook
-	if err := pinToHook(beadsPath, witnessAddress, issueID, moleculeCtx); err != nil {
+	// Pin to hook (replacing patrol)
+	if err := pinToHook(beadsPath, agentAddress, issueID, moleculeCtx); err != nil {
 		fmt.Printf("%s Could not pin to hook: %v\n", style.Dim.Render("Warning:"), err)
 	} else {
-		fmt.Printf("%s Pinned to witness hook\n", style.Bold.Render("✓"))
+		fmt.Printf("%s Pinned to %s hook (patrol replaced)\n", style.Bold.Render("✓"), role)
 	}
 
 	// Sync beads
@@ -743,8 +1008,8 @@ func slingToWitness(townRoot string, target *SlingTarget, thing *SlingThing) err
 		fmt.Printf("%s beads push: %v\n", style.Dim.Render("Warning:"), err)
 	}
 
-	fmt.Printf("%s Witness will run %s on next patrol\n",
-		style.Bold.Render("✓"), thing.ID)
+	fmt.Printf("%s %s will run %s (discrete task, patrol stopped)\n",
+		style.Bold.Render("✓"), strings.Title(role), thing.ID)
 
 	return nil
 }
@@ -754,60 +1019,104 @@ func slingToRefinery(townRoot string, target *SlingTarget, thing *SlingThing) er
 	beadsPath := filepath.Join(townRoot, target.Rig)
 	refineryAddress := fmt.Sprintf("%s/refinery", target.Rig)
 
-	// Check for existing work on hook
-	displacedID, err := checkHookCollision(refineryAddress, beadsPath, slingForce)
-	if err != nil {
-		return err
+	// --replace flag: use legacy behavior (replace hook with discrete work)
+	if slingReplace {
+		fmt.Printf("%s Using --replace: patrol will be terminated\n", style.Warning.Render("⚠"))
+		return slingToPatrolWithReplace(townRoot, beadsPath, refineryAddress, thing, "refinery")
 	}
-	if displacedID != "" {
-		fmt.Printf("%s Displaced %s back to ready pool\n", style.Warning.Render("⚠"), displacedID)
-		if err := releaseDisplacedWork(beadsPath, displacedID); err != nil {
-			fmt.Printf("  %s could not release: %v\n", style.Dim.Render("Warning:"), err)
-		}
-	}
+
+	// Check if patrol is currently running
+	patrolRunning, patrolID := isPatrolRunning(beadsPath, refineryAddress)
 
 	// Sync beads
 	if err := syncBeads(beadsPath, true); err != nil {
 		fmt.Printf("%s beads sync: %v\n", style.Dim.Render("Warning:"), err)
 	}
 
-	// Process the thing
-	var issueID string
-	var moleculeCtx *MoleculeContext
+	// If no patrol running, start the default patrol first
+	if !patrolRunning {
+		patrolTitle := getDefaultPatrolMolecule("refinery")
+		fmt.Printf("No patrol running, starting %s...\n", patrolTitle)
 
-	switch thing.Kind {
-	case "proto":
+		// Resolve the patrol molecule title to its beads issue ID
+		patrolIssueID, err := resolvePatrolMoleculeID(beadsPath, patrolTitle)
+		if err != nil {
+			return fmt.Errorf("resolving patrol molecule: %w", err)
+		}
+
+		patrolThing := &SlingThing{
+			Kind:   "proto",
+			ID:     patrolIssueID, // Use the resolved beads issue ID
+			IsWisp: false,         // Templates are in main DB, spawn there for now
+		}
+		patrolID, _, err = spawnMoleculeFromProto(beadsPath, patrolThing, refineryAddress)
+		if err != nil {
+			return fmt.Errorf("starting patrol: %w", err)
+		}
+		if err := pinToHook(beadsPath, refineryAddress, patrolID, nil); err != nil {
+			return fmt.Errorf("pinning patrol to hook: %w", err)
+		}
+		fmt.Printf("%s Started refinery patrol\n", style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("Patrol running: %s\n", patrolID)
+	}
+
+	// Now queue the work via mail (don't touch hook - patrol stays pinned)
+	router := mail.NewRouter(townRoot)
+
+	// Build work assignment mail
+	b := beads.New(beadsPath)
+	var beadsIssue *BeadsIssue
+	issueID := thing.ID
+
+	// For protos, we need to spawn the molecule but NOT pin it
+	var moleculeCtx *MoleculeContext
+	var err error
+	if thing.Kind == "proto" {
 		issueID, moleculeCtx, err = spawnMoleculeFromProto(beadsPath, thing, refineryAddress)
 		if err != nil {
 			return err
 		}
-	case "issue":
-		issueID = thing.ID
-		if thing.Proto != "" {
-			issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, refineryAddress)
-			if err != nil {
-				return err
-			}
+	} else if thing.Kind == "issue" && thing.Proto != "" {
+		issueID, moleculeCtx, err = spawnMoleculeOnIssue(beadsPath, thing, refineryAddress)
+		if err != nil {
+			return err
 		}
-	case "epic":
-		// Epics go to refinery for batch dispatch to polecats
-		issueID = thing.ID
+	}
+	// Epics can be slung directly as issueID
+
+	issue, _ := b.Show(issueID)
+	if issue != nil {
+		beadsIssue = &BeadsIssue{
+			ID:          issue.ID,
+			Title:       issue.Title,
+			Description: issue.Description,
+			Priority:    issue.Priority,
+			Type:        issue.Type,
+			Status:      issue.Status,
+		}
 	}
 
-	// Pin to refinery hook
-	if err := pinToHook(beadsPath, refineryAddress, issueID, moleculeCtx); err != nil {
-		fmt.Printf("%s Could not pin to hook: %v\n", style.Dim.Render("Warning:"), err)
-	} else {
-		fmt.Printf("%s Pinned to refinery hook\n", style.Bold.Render("✓"))
+	workMsg := buildWorkAssignmentMail(beadsIssue, "", refineryAddress, moleculeCtx)
+	if slingUrgent {
+		workMsg.Subject = "🚨 URGENT: " + workMsg.Subject
 	}
+	if err := router.Send(workMsg); err != nil {
+		return fmt.Errorf("sending work assignment: %w", err)
+	}
+	fmt.Printf("%s Work assignment sent to %s\n", style.Bold.Render("✓"), refineryAddress)
 
 	// Sync beads
 	if err := syncBeads(beadsPath, false); err != nil {
 		fmt.Printf("%s beads push: %v\n", style.Dim.Render("Warning:"), err)
 	}
 
-	fmt.Printf("%s Refinery will process %s on next cycle\n",
-		style.Bold.Render("✓"), thing.ID)
+	if slingUrgent {
+		fmt.Printf("%s Queued as URGENT - will interrupt current patrol cycle\n",
+			style.Bold.Render("✓"))
+	} else {
+		fmt.Printf("%s Queued for next patrol cycle\n", style.Bold.Render("✓"))
+	}
 
 	return nil
 }
