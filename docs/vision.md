@@ -87,9 +87,28 @@ Workers who need help receive it.
 
 ---
 
-## Core Innovation 3: Molecular Chemistry of Work
+## Core Innovation 3: Rig, Cook, Run
 
-Work in Gas Town exists in three phases, following the states of matter:
+Work in Gas Town flows through three phases:
+
+```
+RIG ────→ COOK ────→ RUN
+```
+
+| Phase | What Happens | Key Operator |
+|-------|--------------|--------------|
+| **Rig** | Compose formulas (source level) | extends, compose |
+| **Cook** | Instantiate work (pour/wisp) | cook, pour, wisp |
+| **Run** | Execute steps | Agent execution |
+
+**Rig** is source-level composition (formula YAML).
+**Bond** is artifact-level composition (protos, mols, wisps).
+
+See [rig-cook-run.md](rig-cook-run.md) for the full specification.
+
+### The Three Phases of Matter
+
+Work artifacts exist in three phases:
 
 | Phase | Name | State | Behavior |
 |-------|------|-------|----------|
@@ -138,11 +157,14 @@ Work in Gas Town exists in three phases, following the states of matter:
 
 ### The Polymorphic Bond Operator
 
-**Bond** adapts to its operands:
-- Proto + Proto → Compound Proto (larger template)
-- Proto + Mol → Spawn and attach (template melts into flow)
-- Proto + Wisp → Spawn as vapor and attach
-- Mol + Mol → Link via dependencies
+**Bond** is the artifact-level combiner (distinct from **rig**, which composes
+source formulas). Bond adapts to its operands:
+
+| bond | Proto | Mol | Wisp |
+|------|-------|-----|------|
+| **Proto** | Compound Proto | Spawn + attach | Spawn wisp + attach |
+| **Mol** | Spawn + attach | Link | Link |
+| **Wisp** | Spawn + attach | Link | Link |
 
 This enables patterns like:
 - Patrol wisp discovers issue → bonds new work mol

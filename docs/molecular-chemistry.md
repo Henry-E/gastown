@@ -201,8 +201,22 @@ bd mol distill bd-abc123 --var feature=auth --var version=1.0
 
 ## The Polymorphic Bond Operator
 
-**Bond** is Gas Town's polymorphic combiner - it handles different operand
-types with different phase behaviors:
+Gas Town has **two composition operators** at different abstraction levels:
+
+| Operator | Level | Inputs | When to Use |
+|----------|-------|--------|-------------|
+| **Rig** | Source | Formula + Formula | Authoring time, in YAML |
+| **Bond** | Artifact | Proto/Mol/Wisp + any | Runtime, on cooked artifacts |
+
+**Rig** composes formulas (source YAML with `extends`, `compose`).
+**Bond** composes artifacts (cooked protos, running mols/wisps).
+
+See [rig-cook-run.md](rig-cook-run.md) for the full Rig/Cook/Run lifecycle.
+
+---
+
+**Bond** is Gas Town's polymorphic combiner for artifacts - it handles different
+operand types with different phase behaviors:
 
 ### Bond: Proto + Proto → Compound Proto
 

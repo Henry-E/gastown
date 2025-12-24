@@ -18,17 +18,35 @@ Molecules = Graph Algebra (mechanical, gt executes)
 Steps = AI Cognition (agent provides)
 ```
 
+## The Three Phases: Rig, Cook, Run
+
+Gas Town work flows through three phases:
+
+```
+RIG ────→ COOK ────→ RUN
+```
+
+| Phase | What Happens | Operator | Output |
+|-------|--------------|----------|--------|
+| **Rig** | Compose formulas (source level) | extends, compose | Compound Formula |
+| **Cook** | Instantiate work | cook, pour, wisp | Proto, Mol, Wisp |
+| **Run** | Execute steps | (agent execution) | Work done |
+
+See [rig-cook-run.md](rig-cook-run.md) for the full specification.
+
 ## Formulas and Cooking
 
 > *"Let's cook."* - Walter White
 
-The molecule algebra lives above molecular chemistry. **Formulas** are the
-source code; **cooking** is the process that produces executable protos.
+**Formulas** are the source code; **rigging** composes them; **cooking**
+produces executable artifacts.
 
-### The Four-Tier Model
+### The Artifact Tiers
 
 ```
 Formula (.formula.yaml)     ← "The secret formula" (source code)
+    ↓ rig (compose)         ← "Rig it up" (source-level composition)
+Compound Formula            ← Combined source
     ↓ cook                  ← "Let's cook" (pre-expand, flatten)
 Proto (frozen in beads)     ← "Pure product" (compiled, flat graph)
     ↓ pour/wisp             ← Instantiate
@@ -37,9 +55,21 @@ Mol/Wisp (running)          ← The work flowing
 
 | Tier | Name | Format | Nature |
 |------|------|--------|--------|
-| Source | **Formula** | YAML | Composable, has macros/aspects |
+| Source | **Formula** | YAML | Composable via `extends`/`compose` |
 | Compiled | **Proto** | Beads issue | Frozen, flat graph, fast instantiation |
 | Running | **Mol/Wisp** | Beads issue | Active, flowing work |
+
+### Two Composition Operators
+
+| Operator | Level | Inputs | Output |
+|----------|-------|--------|--------|
+| **Rig** | Source | Formula + Formula | Compound Formula |
+| **Bond** | Artifact | Proto/Mol/Wisp + any | Combined artifact |
+
+**Rig** is source-level composition (formula YAML with `extends`, `compose`).
+**Bond** is artifact-level composition (combining cooked protos, linking mols).
+
+See the Bond Table in [rig-cook-run.md](rig-cook-run.md) for full semantics.
 
 ### Why Cook?
 
