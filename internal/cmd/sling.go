@@ -50,6 +50,11 @@ func init() {
 func runSling(cmd *cobra.Command, args []string) error {
 	beadID := args[0]
 
+	// Polecats cannot sling - check early before writing anything
+	if polecatName := os.Getenv("GT_POLECAT"); polecatName != "" {
+		return fmt.Errorf("polecats cannot sling (use gt done for handoff)")
+	}
+
 	// Verify the bead exists
 	if err := verifyBeadExists(beadID); err != nil {
 		return err
@@ -166,13 +171,6 @@ func detectCloneRoot() (string, error) {
 
 // triggerHandoff restarts the agent session.
 func triggerHandoff(agentID, beadID string) error {
-	// Check if we're a polecat
-	if polecatName := os.Getenv("GT_POLECAT"); polecatName != "" {
-		fmt.Printf("%s Polecat detected - cannot sling (use gt done instead)\n",
-			style.Bold.Render("⚠"))
-		return fmt.Errorf("polecats cannot sling - use gt done for handoff")
-	}
-
 	// Must be in tmux
 	if !tmux.IsInsideTmux() {
 		return fmt.Errorf("not running in tmux - cannot restart")

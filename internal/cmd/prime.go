@@ -1169,15 +1169,21 @@ func checkSlungWork(ctx RoleContext) {
 		return
 	}
 
-	// Check for hook file in the clone root
-	cloneRoot := ctx.WorkDir
+	// Get the git clone root (hooks are stored at clone root, not cwd)
+	cloneRoot, err := getGitRoot()
+	if err != nil {
+		// Not in a git repo - can't have hooks
+		return
+	}
+
 	sw, err := wisp.ReadHook(cloneRoot, agentID)
 	if err != nil {
 		if errors.Is(err, wisp.ErrNoHook) {
 			// No hook - normal case, nothing to do
 			return
 		}
-		// Other error - log but continue
+		// Log other errors (permission, corruption) but continue
+		fmt.Printf("%s Warning: error reading hook: %v\n", style.Dim.Render("⚠"), err)
 		return
 	}
 
@@ -1196,14 +1202,15 @@ func checkSlungWork(ctx RoleContext) {
 	fmt.Printf("  Slung at: %s\n", sw.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Println()
 
-	// Show the bead details
+	// Show the bead details - verify it exists
 	fmt.Println("**Bead details:**")
 	cmd := exec.Command("bd", "show", sw.BeadID)
 	cmd.Dir = cloneRoot
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = nil
-	if cmd.Run() == nil {
+	beadExists := cmd.Run() == nil
+	if beadExists {
 		// Show first 20 lines of bead details
 		lines := strings.Split(stdout.String(), "\n")
 		maxLines := 20
@@ -1214,6 +1221,13 @@ func checkSlungWork(ctx RoleContext) {
 		for _, line := range lines {
 			fmt.Printf("  %s\n", line)
 		}
+	} else {
+		fmt.Printf("  %s Bead %s not found! It may have been deleted.\n",
+			style.Bold.Render("⚠ WARNING:"), sw.BeadID)
+		fmt.Println("  The hook will NOT be burned. Investigate this issue.")
+		fmt.Println()
+		// Don't burn - leave hook for debugging
+		return
 	}
 	fmt.Println()
 
@@ -1222,10 +1236,20 @@ func checkSlungWork(ctx RoleContext) {
 	fmt.Println("  Begin working on this bead immediately. No human input needed.")
 	fmt.Println()
 
-	// Burn the hook now that it's been read
+	// Burn the hook now that it's been read and verified
 	if err := wisp.BurnHook(cloneRoot, agentID); err != nil {
 		fmt.Printf("%s Warning: could not burn hook: %v\n", style.Dim.Render("⚠"), err)
 	}
+}
+
+// getGitRoot returns the root of the current git repository.
+func getGitRoot() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // getAgentIdentity returns the agent identity string for hook lookup.

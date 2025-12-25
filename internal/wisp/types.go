@@ -9,6 +9,7 @@
 package wisp
 
 import (
+	"strings"
 	"time"
 )
 
@@ -126,6 +127,23 @@ func NewPatrolCycle(formula, createdBy string) *PatrolCycle {
 }
 
 // HookFilename returns the filename for an agent's hook file.
+// Agent IDs containing slashes (e.g., "gastown/crew/joe") are sanitized
+// by replacing "/" with "--" to create valid filenames.
 func HookFilename(agent string) string {
-	return HookPrefix + agent + HookSuffix
+	// Sanitize agent ID: replace path separators with double-dash
+	// This is reversible and avoids creating subdirectories
+	sanitized := sanitizeAgentID(agent)
+	return HookPrefix + sanitized + HookSuffix
+}
+
+// sanitizeAgentID converts an agent ID to a safe filename component.
+// "gastown/crew/joe" -> "gastown--crew--joe"
+func sanitizeAgentID(agent string) string {
+	return strings.ReplaceAll(agent, "/", "--")
+}
+
+// unsanitizeAgentID converts a sanitized filename back to an agent ID.
+// "gastown--crew--joe" -> "gastown/crew/joe"
+func unsanitizeAgentID(sanitized string) string {
+	return strings.ReplaceAll(sanitized, "--", "/")
 }
