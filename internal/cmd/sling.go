@@ -51,13 +51,13 @@ Natural language args (for LLM executor):
   gt sling beads-release --args "patch release"
   gt sling code-review gt-abc --args "focus on security issues"
 
-The --args string is stored in the hook and shown to the executor.
+The --args string is injected into the prompt and shown to the executor.
 Since the executor is an LLM, it interprets these instructions naturally.
 
 When the first argument is a formula (not a bead), sling will:
   1. Cook the formula (bd cook)
-  2. Create a wisp instance (bd wisp)
-  3. Attach the wisp to the target's hook
+  2. Create a wisp instance (bd wisp create)
+  3. Pin the wisp to the target (bd update --status=pinned --assignee=<target>)
   4. Nudge the target to start
 
 Formula-on-bead scaffolding (--on flag):
