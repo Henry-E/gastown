@@ -264,21 +264,15 @@ func truncateStr(s string, maxLen int) string {
 func runLogCrash(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil || townRoot == "" {
-		// Try to find town root from common locations
+		// Try to find town root from conventional location
 		// This is called from tmux hook which may not have proper cwd
 		home := os.Getenv("HOME")
-		possibleRoots := []string{
-			home + "/gt",
-			home + "/gastown",
-		}
-		for _, root := range possibleRoots {
-			if _, statErr := os.Stat(root + "/mayor"); statErr == nil {
-				townRoot = root
-				break
-			}
+		defaultRoot := home + "/gt"
+		if _, statErr := os.Stat(defaultRoot + "/mayor"); statErr == nil {
+			townRoot = defaultRoot
 		}
 		if townRoot == "" {
-			return fmt.Errorf("cannot find town root")
+			return fmt.Errorf("cannot find town root (tried cwd and ~/gt)")
 		}
 	}
 
