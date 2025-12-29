@@ -75,6 +75,12 @@ Examples:
 }
 
 func runFeed(cmd *cobra.Command, args []string) error {
+	// Must be in a Gas Town workspace
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace (run from ~/gt or a rig directory)")
+	}
+
 	// Determine working directory
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -83,11 +89,6 @@ func runFeed(cmd *cobra.Command, args []string) error {
 
 	// If --rig specified, find that rig's beads directory
 	if feedRig != "" {
-		townRoot, err := workspace.FindFromCwdOrError()
-		if err != nil {
-			return fmt.Errorf("not in a Gas Town workspace: %w", err)
-		}
-
 		// Try common beads locations for the rig
 		candidates := []string{
 			fmt.Sprintf("%s/%s/mayor/rig", townRoot, feedRig),
