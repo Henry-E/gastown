@@ -191,9 +191,19 @@ func SetupRedirect(townRoot, worktreePath string) error {
 
 	rigRoot := filepath.Join(townRoot, parts[0])
 	rigBeadsPath := filepath.Join(rigRoot, ".beads")
+	mayorBeadsPath := filepath.Join(rigRoot, "mayor", "rig", ".beads")
 
+	// Check rig-level .beads first, fall back to mayor/rig/.beads (tracked beads architecture)
+	usesMayorFallback := false
 	if _, err := os.Stat(rigBeadsPath); os.IsNotExist(err) {
-		return fmt.Errorf("no rig .beads found at %s", rigBeadsPath)
+		// No rig/.beads - check for mayor/rig/.beads (tracked beads architecture)
+		if _, err := os.Stat(mayorBeadsPath); os.IsNotExist(err) {
+			return fmt.Errorf("no beads found at %s or %s", rigBeadsPath, mayorBeadsPath)
+		}
+		// Using mayor fallback - warn user to run bd doctor
+		fmt.Fprintf(os.Stderr, "Warning: rig .beads not found at %s, using %s\n", rigBeadsPath, mayorBeadsPath)
+		fmt.Fprintf(os.Stderr, "  Run 'bd doctor' to fix rig beads configuration\n")
+		usesMayorFallback = true
 	}
 
 	// Clean up runtime files in .beads/ but preserve tracked files (formulas/, README.md, etc.)
@@ -211,18 +221,26 @@ func SetupRedirect(townRoot, worktreePath string) error {
 	// e.g., crew/<name> (depth 2) -> ../../.beads
 	//       refinery/rig (depth 2) -> ../../.beads
 	depth := len(parts) - 1 // subtract 1 for rig name itself
-	redirectPath := strings.Repeat("../", depth) + ".beads"
+	upPath := strings.Repeat("../", depth)
 
-	// Check if rig-level beads has a redirect (tracked beads case).
-	// If so, redirect directly to the final destination to avoid chains.
-	// The bd CLI doesn't support redirect chains, so we must skip intermediate hops.
-	rigRedirectPath := filepath.Join(rigBeadsPath, "redirect")
-	if data, err := os.ReadFile(rigRedirectPath); err == nil {
-		rigRedirectTarget := strings.TrimSpace(string(data))
-		if rigRedirectTarget != "" {
-			// Rig has redirect (e.g., "mayor/rig/.beads" for tracked beads).
-			// Redirect worktree directly to the final destination.
-			redirectPath = strings.Repeat("../", depth) + rigRedirectTarget
+	var redirectPath string
+	if usesMayorFallback {
+		// Direct redirect to mayor/rig/.beads since rig/.beads doesn't exist
+		redirectPath = upPath + "mayor/rig/.beads"
+	} else {
+		redirectPath = upPath + ".beads"
+
+		// Check if rig-level beads has a redirect (tracked beads case).
+		// If so, redirect directly to the final destination to avoid chains.
+		// The bd CLI doesn't support redirect chains, so we must skip intermediate hops.
+		rigRedirectPath := filepath.Join(rigBeadsPath, "redirect")
+		if data, err := os.ReadFile(rigRedirectPath); err == nil {
+			rigRedirectTarget := strings.TrimSpace(string(data))
+			if rigRedirectTarget != "" {
+				// Rig has redirect (e.g., "mayor/rig/.beads" for tracked beads).
+				// Redirect worktree directly to the final destination.
+				redirectPath = upPath + rigRedirectTarget
+			}
 		}
 	}
 
