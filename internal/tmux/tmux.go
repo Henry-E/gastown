@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -885,6 +886,32 @@ func (t *Tmux) GetPanePID(session string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// processMatchesNames checks if a process's binary name matches any of the given names.
+// Uses ps to get the actual command name from the process's executable path.
+// This handles cases where argv[0] is modified (e.g., Claude showing version "2.1.30").
+func processMatchesNames(pid string, names []string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	// Use ps to get the command name (COMM column gives the executable name)
+	cmd := exec.Command("ps", "-p", pid, "-o", "comm=")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	// Get just the base name (in case it's a full path like /Users/.../claude)
+	commPath := strings.TrimSpace(string(out))
+	comm := filepath.Base(commPath)
+
+	// Check if any name matches
+	for _, name := range names {
+		if comm == name {
+			return true
+		}
+	}
+	return false
+}
+
 // hasDescendantWithNames checks if a process has any descendant (child, grandchild, etc.)
 // matching any of the given names. Recursively traverses the process tree up to maxDepth.
 // Used when the pane command is a shell (bash, zsh) that launched an agent.
@@ -1161,7 +1188,12 @@ func (t *Tmux) IsRuntimeRunning(session string, processNames []string) bool {
 		}
 	}
 	// If pane command is unrecognized (not in processNames, not a shell),
-	// still check descendants as fallback. This handles version-as-argv[0].
+	// check if the process ITSELF matches (handles version-as-argv[0] like "2.1.30")
+	// before checking descendants.
+	if processMatchesNames(pid, processNames) {
+		return true
+	}
+	// Finally check descendants as fallback
 	return hasDescendantWithNames(pid, processNames, 0)
 }
 
