@@ -358,9 +358,34 @@ Note: This step is safe to retry if it fails.
 """
 
 [[steps]]
+id = "generate-newsletter"
+title = "Generate release newsletter"
+needs = ["push-release"]
+description = """
+Generate a narrative newsletter summarizing this release.
+
+The newsletter generator aggregates changelog, commits, new commands, and
+breaking changes into a narrative format suitable for users.
+
+```bash
+# Generate newsletter for this release
+uv run scripts/generate-newsletter.py --to-release v{{version}}
+
+# Or specify the range explicitly (e.g., from last release)
+PREV_TAG=$(git describe --tags --abbrev=0 v{{version}}^)
+uv run scripts/generate-newsletter.py --from-release $PREV_TAG --to-release v{{version}}
+```
+
+The script outputs to NEWSLETTER.md by default. Review and commit if desired.
+
+**Note:** This step can run in parallel with verification steps since it only
+reads from git history and CHANGELOG.md.
+"""
+
+[[steps]]
 id = "release-complete"
 title = "Release complete"
-needs = ["restart-daemons"]
+needs = ["restart-daemons", "generate-newsletter"]
 description = """
 Release v{{version}} is complete!
 
@@ -373,6 +398,7 @@ Summary:
 - GitHub Actions triggered for artifact builds
 - Local gt binary rebuilt and installed
 - Daemons restarted with new version
+- Release newsletter generated
 
 Optional next steps:
 - Monitor GitHub Actions for release build completion
