@@ -1,6 +1,7 @@
 package crew
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -470,6 +471,83 @@ func TestManagerAddSyncsRemotesFromRig(t *testing.T) {
 	}
 	if upstreamURL != upstreamRepoPath {
 		t.Errorf("crew upstream = %q, want %q", upstreamURL, upstreamRepoPath)
+	}
+}
+
+func TestManagerRenameValidatesNewName(t *testing.T) {
+	// Regression test: Rename must validate newName to prevent path traversal
+	// and invalid characters. See: gt-gt3zv
+	tmpDir, err := os.MkdirTemp("", "crew-test-rename-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	rigPath := filepath.Join(tmpDir, "test-rig")
+	if err := os.MkdirAll(rigPath, 0755); err != nil {
+		t.Fatalf("failed to create rig dir: %v", err)
+	}
+
+	g := git.NewGit(rigPath)
+
+	bareRepoPath := filepath.Join(tmpDir, "bare-repo.git")
+	if err := runCmd("git", "init", "--bare", bareRepoPath); err != nil {
+		t.Fatalf("failed to create bare repo: %v", err)
+	}
+
+	r := &rig.Rig{
+		Name:   "test-rig",
+		Path:   rigPath,
+		GitURL: bareRepoPath,
+	}
+
+	mgr := NewManager(r, g)
+
+	// Add a valid worker
+	_, err = mgr.Add("alice", false)
+	if err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	// Attempt renames with invalid names - all should fail
+	invalidNames := []string{
+		"../../../etc",
+		"bad-name",
+		"has.dot",
+		"has space",
+		"..",
+		".",
+		"",
+		"path/sep",
+	}
+
+	for _, name := range invalidNames {
+		err := mgr.Rename("alice", name)
+		if err == nil {
+			t.Errorf("Rename to %q should have failed but succeeded", name)
+		}
+		if err != nil && !errors.Is(err, ErrInvalidCrewName) {
+			t.Errorf("Rename to %q: expected ErrInvalidCrewName, got %v", name, err)
+		}
+	}
+
+	// Valid rename should succeed
+	err = mgr.Rename("alice", "bob")
+	if err != nil {
+		t.Errorf("Rename to 'bob' should have succeeded: %v", err)
+	}
+
+	// Verify alice no longer exists and bob does
+	_, err = mgr.Get("alice")
+	if err != ErrCrewNotFound {
+		t.Errorf("expected ErrCrewNotFound for alice, got %v", err)
+	}
+	worker, err := mgr.Get("bob")
+	if err != nil {
+		t.Errorf("Get bob failed: %v", err)
+	}
+	if worker != nil && worker.Name != "bob" {
+		t.Errorf("expected name 'bob', got %q", worker.Name)
 	}
 }
 
