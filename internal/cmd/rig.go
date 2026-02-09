@@ -650,7 +650,7 @@ func runRigAdopt(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// Check for tracked beads and initialize beads.db if missing (Issue #72)
+	// Check for tracked beads and initialize database if missing (Issue #72)
 	rigPath := filepath.Join(townRoot, name)
 	beadsDirCandidates := []string{
 		filepath.Join(rigPath, ".beads"),
@@ -688,20 +688,13 @@ func runRigAdopt(_ *cobra.Command, args []string) error {
 			f.Close()
 		}
 
-		// Init beads database if missing.
-		// Check for both SQLite (beads.db) and Dolt (dolt/ directory) backends.
-		beadsDB := filepath.Join(beadsDir, "beads.db")
-		doltDir := filepath.Join(beadsDir, "dolt")
-		_, sqliteErr := os.Stat(beadsDB)
-		_, doltErr := os.Stat(doltDir)
-		if os.IsNotExist(sqliteErr) && os.IsNotExist(doltErr) {
+		// Init database if metadata.json is missing (DB files are gitignored)
+		metadataPath := filepath.Join(beadsDir, "metadata.json")
+		if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
 			prefix := result.BeadsPrefix
 			if prefix == "" {
 				break
 			}
-			// Remove stale WAL/SHM files that could cause SQLite errors on re-init
-			os.Remove(filepath.Join(beadsDir, "beads.db-wal"))
-			os.Remove(filepath.Join(beadsDir, "beads.db-shm"))
 			workDir := filepath.Dir(beadsDir) // directory containing .beads/
 			// IMPORTANT: Use --backend dolt --server to prevent SQLite creation.
 			// Gas Town rigs use Dolt server mode via the shared town Dolt sql-server.

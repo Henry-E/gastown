@@ -499,7 +499,7 @@ func initTownBeads(townPath string) error {
 	}
 
 	// Ensure issues.jsonl exists BEFORE creating routes.jsonl.
-	// Without issues.jsonl, bd's auto-export may write issues to routes.jsonl,
+	// If routes.jsonl is created first, bd's auto-export will write issues to routes.jsonl,
 	// corrupting it. Creating an empty issues.jsonl prevents this.
 	issuesJSONL := filepath.Join(townPath, ".beads", "issues.jsonl")
 	if _, err := os.Stat(issuesJSONL); os.IsNotExist(err) {

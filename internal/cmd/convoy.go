@@ -1062,7 +1062,7 @@ func runConvoyStatus(cmd *cobra.Command, args []string) error {
 
 	convoy := convoys[0]
 
-	// Get tracked issues by querying SQLite directly
+	// Get tracked issues by querying the database directly
 	// (bd dep list doesn't properly show cross-rig external dependencies)
 	type trackedIssue struct {
 		ID        string `json:"id"`
