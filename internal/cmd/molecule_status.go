@@ -220,7 +220,7 @@ func runMoleculeProgress(cmd *cobra.Command, args []string) error {
 
 			// Check if all dependencies are closed using Dependencies field
 			// (from bd show), not DependsOn (which is empty from bd list).
-			// Only "blocks" type dependencies block progress - ignore "parent-child".
+			// Only non-"parent-child" dependencies block progress.
 			allDepsClosed := true
 			hasBlockingDeps := false
 			var deps []beads.IssueDep
@@ -228,8 +228,8 @@ func runMoleculeProgress(cmd *cobra.Command, args []string) error {
 				deps = step.Dependencies
 			}
 			for _, dep := range deps {
-				if dep.DependencyType != "blocks" {
-					continue // Skip parent-child and other non-blocking relationships
+				if isNonBlockingDepType(dep.DependencyType) {
+					continue
 				}
 				hasBlockingDeps = true
 				if !closedIDs[dep.ID] {
@@ -244,6 +244,10 @@ func runMoleculeProgress(cmd *cobra.Command, args []string) error {
 				progress.BlockedSteps = append(progress.BlockedSteps, child.ID)
 			}
 		}
+	}
+
+	if len(progress.ReadySteps) > 1 {
+		sortStepIDsBySequence(progress.ReadySteps)
 	}
 
 	// Calculate completion percentage
@@ -593,7 +597,7 @@ func getMoleculeProgressInfo(b *beads.Beads, moleculeRootID string) (*MoleculePr
 
 			// Check if all dependencies are closed using Dependencies field
 			// (from bd show), not DependsOn (which is empty from bd list).
-			// Only "blocks" type dependencies block progress - ignore "parent-child".
+			// Only non-"parent-child" dependencies block progress.
 			allDepsClosed := true
 			hasBlockingDeps := false
 			var deps []beads.IssueDep
@@ -601,8 +605,8 @@ func getMoleculeProgressInfo(b *beads.Beads, moleculeRootID string) (*MoleculePr
 				deps = step.Dependencies
 			}
 			for _, dep := range deps {
-				if dep.DependencyType != "blocks" {
-					continue // Skip parent-child and other non-blocking relationships
+				if isNonBlockingDepType(dep.DependencyType) {
+					continue
 				}
 				hasBlockingDeps = true
 				if !closedIDs[dep.ID] {
@@ -617,6 +621,10 @@ func getMoleculeProgressInfo(b *beads.Beads, moleculeRootID string) (*MoleculePr
 				progress.BlockedSteps = append(progress.BlockedSteps, child.ID)
 			}
 		}
+	}
+
+	if len(progress.ReadySteps) > 1 {
+		sortStepIDsBySequence(progress.ReadySteps)
 	}
 
 	// Calculate completion percentage
@@ -891,12 +899,12 @@ func runMoleculeCurrent(cmd *cobra.Command, args []string) error {
 
 		// Check dependencies using Dependencies field (from bd show),
 		// not DependsOn (which is empty from bd list).
-		// Only "blocks" type dependencies block progress - ignore "parent-child".
+		// Only non-"parent-child" dependencies block progress.
 		allDepsClosed := true
 		hasBlockingDeps := false
 		for _, dep := range step.Dependencies {
-			if dep.DependencyType != "blocks" {
-				continue // Skip parent-child and other non-blocking relationships
+			if isNonBlockingDepType(dep.DependencyType) {
+				continue
 			}
 			hasBlockingDeps = true
 			if !closedIDs[dep.ID] {
@@ -907,6 +915,10 @@ func runMoleculeCurrent(cmd *cobra.Command, args []string) error {
 		if !hasBlockingDeps || allDepsClosed {
 			readySteps = append(readySteps, step)
 		}
+	}
+
+	if len(readySteps) > 1 {
+		sortStepsBySequence(readySteps)
 	}
 
 	// Determine current step and status

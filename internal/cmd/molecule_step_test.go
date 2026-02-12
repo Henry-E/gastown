@@ -306,7 +306,7 @@ func TestFindNextReadyStep(t *testing.T) {
 			openStepsMap, _ := m.ShowMultiple(openStepIDs)
 
 			// Find ready step using Dependencies (not DependsOn!)
-			// Only "blocks" type dependencies block progress - ignore "parent-child".
+			// Only non-"parent-child" dependencies block progress.
 			var readyStep *beads.Issue
 			for _, stepID := range openStepIDs {
 				step := openStepsMap[stepID]
@@ -318,8 +318,8 @@ func TestFindNextReadyStep(t *testing.T) {
 				allDepsClosed := true
 				hasBlockingDeps := false
 				for _, dep := range step.Dependencies {
-					if dep.DependencyType != "blocks" {
-						continue // Skip parent-child and other non-blocking relationships
+					if isNonBlockingDepType(dep.DependencyType) {
+						continue
 					}
 					hasBlockingDeps = true
 					if !closedIDs[dep.ID] {
@@ -452,7 +452,7 @@ func TestStepDoneScenarios(t *testing.T) {
 				openStepsMap, _ := m.ShowMultiple(openStepIDs)
 
 				// Find ready step using Dependencies (not DependsOn!)
-				// Only "blocks" type dependencies block progress - ignore "parent-child".
+				// Only non-"parent-child" dependencies block progress.
 				var readyStep *beads.Issue
 				for _, stepID := range openStepIDs {
 					step := openStepsMap[stepID]
@@ -464,8 +464,8 @@ func TestStepDoneScenarios(t *testing.T) {
 					allDepsClosed := true
 					hasBlockingDeps := false
 					for _, dep := range step.Dependencies {
-						if dep.DependencyType != "blocks" {
-							continue // Skip parent-child and other non-blocking relationships
+						if isNonBlockingDepType(dep.DependencyType) {
+							continue
 						}
 						hasBlockingDeps = true
 						if !closedIDs[dep.ID] {
@@ -615,7 +615,7 @@ func TestFindNextReadyStepWithBdListBehavior(t *testing.T) {
 			openStepsMap, _ := m.ShowMultiple(openStepIDs)
 
 			// Step 3: Find ready step using Dependencies (not DependsOn!)
-			// Only "blocks" type dependencies block progress - ignore "parent-child".
+			// Only non-"parent-child" dependencies block progress.
 			var readyStep *beads.Issue
 			for _, stepID := range openStepIDs {
 				step := openStepsMap[stepID]
@@ -627,8 +627,8 @@ func TestFindNextReadyStepWithBdListBehavior(t *testing.T) {
 				allDepsClosed := true
 				hasBlockingDeps := false
 				for _, dep := range step.Dependencies {
-					if dep.DependencyType != "blocks" {
-						continue // Skip parent-child and other non-blocking relationships
+					if isNonBlockingDepType(dep.DependencyType) {
+						continue
 					}
 					hasBlockingDeps = true
 					if !closedIDs[dep.ID] {
@@ -749,28 +749,24 @@ func makeStepIssueWithDepType(id, title, parent, status string, deps []beads.Iss
 // "parent-child", "tracks", "related", etc.).
 func TestNonBlocksDepTypeIgnored(t *testing.T) {
 	tests := []struct {
-		name       string
-		depType    string
-		wantReady  int // How many steps SHOULD be ready
-		wantBuggy  int // How many steps the buggy code marks as ready
+		name      string
+		depType   string
+		wantReady int // How many steps SHOULD be ready
 	}{
 		{
-			name:      "empty dependency type treated as non-blocking",
+			name:      "empty dependency type treated as blocking",
 			depType:   "",
 			wantReady: 1, // Only step 1 (no deps) should be ready
-			wantBuggy: 3, // Bug: all 3 steps appear ready
 		},
 		{
-			name:      "needs dependency type treated as non-blocking",
+			name:      "needs dependency type treated as blocking",
 			depType:   "needs",
 			wantReady: 1,
-			wantBuggy: 3,
 		},
 		{
-			name:      "depends-on dependency type treated as non-blocking",
+			name:      "depends-on dependency type treated as blocking",
 			depType:   "depends-on",
 			wantReady: 1,
-			wantBuggy: 3,
 		},
 	}
 
@@ -813,8 +809,8 @@ func TestNonBlocksDepTypeIgnored(t *testing.T) {
 				allDepsClosed := true
 				hasBlockingDeps := false
 				for _, dep := range step.Dependencies {
-					if dep.DependencyType != "blocks" {
-						continue // BUG: skips non-"blocks" deps
+					if isNonBlockingDepType(dep.DependencyType) {
+						continue
 					}
 					hasBlockingDeps = true
 					if !closedIDs[dep.ID] {
@@ -827,17 +823,8 @@ func TestNonBlocksDepTypeIgnored(t *testing.T) {
 				}
 			}
 
-			// Current buggy behavior: all steps appear ready
-			if len(readySteps) != tt.wantBuggy {
-				t.Errorf("buggy code: got %d ready steps, expected %d (bug confirmation)", len(readySteps), tt.wantBuggy)
-			}
-
-			// After the fix, only the correct number should be ready
-			// This assertion documents the DESIRED behavior:
-			if len(readySteps) == tt.wantReady {
-				t.Log("FIXED: correct number of ready steps")
-			} else {
-				t.Errorf("NEEDS FIX: got %d ready steps, want %d", len(readySteps), tt.wantReady)
+			if len(readySteps) != tt.wantReady {
+				t.Fatalf("got %d ready steps, want %d", len(readySteps), tt.wantReady)
 			}
 		})
 	}
@@ -887,7 +874,7 @@ func TestReadyStepOrderReversed(t *testing.T) {
 		allDepsClosed := true
 		hasBlockingDeps := false
 		for _, dep := range step.Dependencies {
-			if dep.DependencyType != "blocks" {
+			if isNonBlockingDepType(dep.DependencyType) {
 				continue
 			}
 			hasBlockingDeps = true
@@ -905,16 +892,10 @@ func TestReadyStepOrderReversed(t *testing.T) {
 		t.Fatalf("expected 5 ready steps (no deps), got %d", len(readySteps))
 	}
 
-	// BUG: The first "ready" step is the LAST formula step because
-	// bd list returns children in reverse creation order and readySteps
-	// preserves that order.
+	sortStepsBySequence(readySteps)
 	firstReady := readySteps[0]
-
-	// Document the bug: first ready step should be step 1 but is step 5
-	if firstReady.ID == "gt-mol.1" {
-		t.Log("FIXED: first ready step is the first formula step")
-	} else {
-		t.Errorf("NEEDS FIX: first ready step is %s (%s), want gt-mol.1 (Ensure labels)",
+	if firstReady.ID != "gt-mol.1" {
+		t.Fatalf("first ready step is %s (%s), want gt-mol.1 (Ensure labels)",
 			firstReady.ID, firstReady.Title)
 	}
 
@@ -984,7 +965,7 @@ func TestGetMoleculeProgressInfoDepTypeFilter(t *testing.T) {
 		allDepsClosed := true
 		hasBlockingDeps := false
 		for _, dep := range step.Dependencies {
-			if dep.DependencyType != "blocks" {
+			if isNonBlockingDepType(dep.DependencyType) {
 				continue
 			}
 			hasBlockingDeps = true
@@ -1000,24 +981,14 @@ func TestGetMoleculeProgressInfoDepTypeFilter(t *testing.T) {
 		}
 	}
 
-	// Bug: Step 3 (Finalize) appears ready because its dep type is "" not "blocks"
-	// It should be BLOCKED (depends on step 2 which is open)
-	foundStep3Ready := false
-	for _, id := range readySteps {
-		if id == "gt-mol.3" {
-			foundStep3Ready = true
-		}
-	}
-
-	if foundStep3Ready {
-		t.Error("BUG CONFIRMED: Step 3 (Finalize) is in readySteps but should be blocked " +
-			"(its dependency on step 2 has empty DependencyType, which the filter skips)")
-	}
+	sortStepIDsBySequence(readySteps)
+	sortStepIDsBySequence(blockedSteps)
 
 	// Desired: only step 1 is ready, steps 2 and 3 are blocked
-	if len(readySteps) == 1 && readySteps[0] == "gt-mol.1" {
-		t.Log("FIXED: only step 1 is ready")
-	} else {
-		t.Errorf("NEEDS FIX: readySteps=%v, want [gt-mol.1]", readySteps)
+	if len(readySteps) != 1 || readySteps[0] != "gt-mol.1" {
+		t.Fatalf("readySteps=%v, want [gt-mol.1]", readySteps)
+	}
+	if len(blockedSteps) != 2 || blockedSteps[0] != "gt-mol.2" || blockedSteps[1] != "gt-mol.3" {
+		t.Fatalf("blockedSteps=%v, want [gt-mol.2 gt-mol.3]", blockedSteps)
 	}
 }
