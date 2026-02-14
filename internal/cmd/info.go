@@ -75,24 +75,6 @@ type VersionChange struct {
 // versionChanges contains agent-actionable changes for recent versions
 var versionChanges = []VersionChange{
 	{
-		Version: "0.6.0",
-		Date:    "2026-02-14",
-		Changes: []string{
-			"BREAKING: SQLite storage removed from gastown; Dolt is the sole backend",
-			"BREAKING: bd daemon code removed; Gas Town is Dolt-native",
-			"NEW: gt dolt command - server management, migration, rollback, health status",
-			"NEW: Branch-per-polecat Dolt write isolation for concurrent agents",
-			"NEW: Dashboard overhaul - SSE real-time updates, command palette, convoy drill-down",
-			"NEW: Centralized hook management - gt hooks sync/diff/list/init",
-			"NEW: gt compact - TTL-based wisp compaction with KRC value decay model",
-			"NEW: Agent-agnostic command provisioning (OpenCode, Cursor, Augment support)",
-			"NEW: --stdin flags for gt nudge, gt mail send, gt sling, gt handoff, gt escalate",
-			"FIX: 17+ code review findings merged - race conditions, error handling, security",
-			"FIX: Multiple TOCTOU races fixed in Dolt startup, polecat spawn, merge queue",
-			"FIX: Zombie detection race - newly-spawned polecats no longer killed during startup",
-		},
-	},
-	{
 		Version: "0.5.0",
 		Date:    "2026-01-22",
 		Changes: []string{
