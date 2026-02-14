@@ -182,13 +182,17 @@ func (c *CheckMisclassifiedWisps) shouldBeWisp(id, title, issueType string, labe
 		return "patrol molecule ID pattern"
 	}
 
-	// Check for specific title patterns indicating operational work
-	lowerTitle := strings.ToLower(title)
-	if strings.Contains(lowerTitle, "patrol cycle") ||
-		strings.Contains(lowerTitle, "witness patrol") ||
-		strings.Contains(lowerTitle, "deacon patrol") ||
-		strings.Contains(lowerTitle, "refinery patrol") {
-		return "patrol title indicates ephemeral workflow"
+	// Check for specific title patterns indicating operational work.
+	// Only apply title heuristic to molecule-type issues to avoid false positives
+	// on bug reports that mention patrols (e.g. "Witness patrol formula leaks wisps").
+	if issueType == "molecule" {
+		lowerTitle := strings.ToLower(title)
+		if strings.Contains(lowerTitle, "patrol cycle") ||
+			strings.Contains(lowerTitle, "witness patrol") ||
+			strings.Contains(lowerTitle, "deacon patrol") ||
+			strings.Contains(lowerTitle, "refinery patrol") {
+			return "patrol title indicates ephemeral workflow"
+		}
 	}
 
 	return ""
