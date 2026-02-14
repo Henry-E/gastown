@@ -1255,15 +1255,24 @@ func FindOrCreateRigBeadsDir(townRoot, rigName string) (string, error) {
 		return dir, nil
 	}
 
-	// Check mayor/rig/.beads first (canonical location)
+	// Check mayor/rig/.beads first (canonical location).
+	// Use MkdirAll as an idempotent existence check+create to close the
+	// TOCTOU window between os.Stat and the caller's file operations.
 	mayorBeads := filepath.Join(townRoot, rigName, "mayor", "rig", ".beads")
 	if _, err := os.Stat(mayorBeads); err == nil {
+		// Ensure it still exists (no-op if present, recreates if deleted)
+		if err := os.MkdirAll(mayorBeads, 0755); err != nil {
+			return "", fmt.Errorf("ensuring mayor beads dir: %w", err)
+		}
 		return mayorBeads, nil
 	}
 
 	// Check rig-root .beads
 	rigBeads := filepath.Join(townRoot, rigName, ".beads")
 	if _, err := os.Stat(rigBeads); err == nil {
+		if err := os.MkdirAll(rigBeads, 0755); err != nil {
+			return "", fmt.Errorf("ensuring rig beads dir: %w", err)
+		}
 		return rigBeads, nil
 	}
 
