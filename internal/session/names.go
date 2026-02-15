@@ -50,11 +50,9 @@ func OverseerSessionName() string {
 }
 
 // BootSessionName returns the session name for the Boot watchdog.
-// Note: We use "gt-boot" instead of "hq-deacon-boot" to avoid tmux prefix
-// matching collisions. Tmux matches session names by prefix, so "hq-deacon-boot"
-// would match when checking for "hq-deacon", causing HasSession("hq-deacon")
-// to return true when only Boot is running.
+// Boot is town-level (launched by deacon), so it uses the hq- prefix.
+// "hq-boot" avoids tmux prefix-matching collisions with "hq-deacon".
 func BootSessionName() string {
-	return Prefix + "boot"
+	return HQPrefix + "boot"
 }
 

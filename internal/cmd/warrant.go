@@ -346,16 +346,8 @@ func targetToSessionName(target string) (string, error) {
 		// This shouldn't happen - need dog name
 		return "", fmt.Errorf("invalid target: need dog name (e.g., deacon/dogs/alpha)")
 	case len(parts) == 3 && parts[0] == "deacon" && parts[1] == "dogs":
-		// deacon/dogs/alpha -> gt-dog-alpha (or gt-<town>-deacon-alpha)
-		townRoot, err := workspace.FindFromCwd()
-		if err != nil {
-			return fmt.Sprintf("gt-dog-%s", parts[2]), nil
-		}
-		townName, err := workspace.GetTownName(townRoot)
-		if err != nil {
-			return fmt.Sprintf("gt-dog-%s", parts[2]), nil
-		}
-		return fmt.Sprintf("gt-%s-deacon-%s", townName, parts[2]), nil
+		// deacon/dogs/alpha -> hq-dog-alpha
+		return fmt.Sprintf("hq-dog-%s", parts[2]), nil
 	default:
 		// Fallback: just use the target with dashes
 		return "gt-" + strings.ReplaceAll(target, "/", "-"), nil
