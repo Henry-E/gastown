@@ -939,7 +939,7 @@ func (r *Router) sendToSingle(msg *Message) error {
 
 	// Notify recipient if they have an active session (best-effort notification)
 	// Skip notification for self-mail (handoffs to future-self don't need present-self notified)
-	if !isSelfMail(msg.From, msg.To) {
+	if !isSelfMail(msg.From, msg.To) && !msg.SuppressNotify {
 		_ = r.notifyRecipient(msg)
 	}
 
@@ -1331,7 +1331,7 @@ func (r *Router) notifyRecipient(msg *Message) error {
 		}
 	}
 
-	sessionIDs := addressToSessionIDs(msg.To)
+	sessionIDs := AddressToSessionIDs(msg.To)
 	if len(sessionIDs) == 0 {
 		return nil // Unable to determine session ID
 	}
@@ -1365,6 +1365,16 @@ func (r *Router) notifyRecipient(msg *Message) error {
 	}
 
 	return nil // No active session found
+}
+
+// IsRecipientMuted checks if a mail recipient has DND/muted notifications enabled.
+// Returns true if the recipient is muted and should not receive tmux nudges.
+// Fails open (returns false) if the agent bead cannot be found or the town root is not set.
+func (r *Router) IsRecipientMuted(address string) bool {
+	if r.townRoot == "" {
+		return false
+	}
+	return r.isRecipientMuted(address)
 }
 
 // isRecipientMuted checks if a mail recipient has DND/muted notifications enabled.
@@ -1420,14 +1430,14 @@ func addressToAgentBeadID(address string) string {
 	}
 }
 
-// addressToSessionIDs converts a mail address to possible tmux session IDs.
+// AddressToSessionIDs converts a mail address to possible tmux session IDs.
 // Returns multiple candidates since the canonical address format (rig/name)
 // doesn't distinguish between crew workers (gt-rig-crew-name) and polecats
 // (gt-rig-name). The caller should try each and use the one that exists.
 //
 // This supersedes the approach in PR #896 which only handled slash-to-dash
 // conversion but didn't address the crew/polecat ambiguity.
-func addressToSessionIDs(address string) []string {
+func AddressToSessionIDs(address string) []string {
 	// Overseer address: "overseer" (human operator)
 	if address == "overseer" {
 		return []string{session.OverseerSessionName()}
@@ -1484,9 +1494,9 @@ func addressToSessionIDs(address string) []string {
 
 // addressToSessionID converts a mail address to a tmux session ID.
 // Returns empty string if address format is not recognized.
-// Deprecated: Use addressToSessionIDs for proper crew/polecat handling.
+// Deprecated: Use AddressToSessionIDs for proper crew/polecat handling.
 func addressToSessionID(address string) string {
-	ids := addressToSessionIDs(address)
+	ids := AddressToSessionIDs(address)
 	if len(ids) == 0 {
 		return ""
 	}

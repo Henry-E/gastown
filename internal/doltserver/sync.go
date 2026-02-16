@@ -194,3 +194,4 @@ func SyncDatabases(townRoot string, opts SyncOptions) []SyncResult {
 
 	return results
 }
+

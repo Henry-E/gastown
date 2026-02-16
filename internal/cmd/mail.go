@@ -29,6 +29,7 @@ var (
 	mailThreadJSON    bool
 	mailReplySubject  string
 	mailReplyMessage  string
+	mailNoNotify      bool // Suppress auto-nudge notification to recipient
 	mailStdin         bool // Read message body from stdin
 
 	// Search flags
@@ -465,6 +466,7 @@ func init() {
 	mailSendCmd.Flags().BoolVar(&mailPermanent, "permanent", false, "Send as permanent (not ephemeral, synced to remote)")
 	mailSendCmd.Flags().BoolVar(&mailSendSelf, "self", false, "Send to self (auto-detect from cwd)")
 	mailSendCmd.Flags().StringArrayVar(&mailCC, "cc", nil, "CC recipients (can be used multiple times)")
+	mailSendCmd.Flags().BoolVar(&mailNoNotify, "no-notify", false, "Suppress auto-nudge notification to recipient")
 	_ = mailSendCmd.MarkFlagRequired("subject") // cobra flags: error only at runtime if missing
 
 	// Inbox flags

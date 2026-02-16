@@ -123,6 +123,11 @@ type Message struct {
 	// ClaimedAt is when the queue message was claimed.
 	// Only set for queue messages after claiming.
 	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+
+	// SuppressNotify is an in-memory delivery hint telling the router's
+	// sendToSingle not to enqueue its own nudge notification. The CLI sets
+	// this when it handles idle-check + immediate delivery itself.
+	SuppressNotify bool `json:"-"`
 }
 
 // NewMessage creates a new message with a generated ID and thread ID.

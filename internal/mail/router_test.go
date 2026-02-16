@@ -132,14 +132,14 @@ func TestAddressToSessionIDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.address, func(t *testing.T) {
-			got := addressToSessionIDs(tt.address)
+			got := AddressToSessionIDs(tt.address)
 			if len(got) != len(tt.want) {
-				t.Errorf("addressToSessionIDs(%q) = %v, want %v", tt.address, got, tt.want)
+				t.Errorf("AddressToSessionIDs(%q) = %v, want %v", tt.address, got, tt.want)
 				return
 			}
 			for i, v := range got {
 				if v != tt.want[i] {
-					t.Errorf("addressToSessionIDs(%q)[%d] = %q, want %q", tt.address, i, v, tt.want[i])
+					t.Errorf("AddressToSessionIDs(%q)[%d] = %q, want %q", tt.address, i, v, tt.want[i])
 				}
 			}
 		})
@@ -155,7 +155,7 @@ func TestAddressToSessionID(t *testing.T) {
 	session.SetDefaultRegistry(reg)
 	defer session.SetDefaultRegistry(old)
 
-	// Deprecated wrapper - returns first candidate from addressToSessionIDs
+	// Deprecated wrapper - returns first candidate from AddressToSessionIDs
 	tests := []struct {
 		address string
 		want    string
