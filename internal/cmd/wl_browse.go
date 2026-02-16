@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/style"
-	"github.com/steveyegge/gastown/internal/wasteland"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -28,9 +26,8 @@ var wlBrowseCmd = &cobra.Command{
 	Short: "Browse wanted items on the commons board",
 	Args:  cobra.NoArgs,
 	RunE:  runWLBrowse,
-	Long: `Browse the Wasteland wanted board.
+	Long: `Browse the Wasteland wanted board (hop/wl-commons).
 
-Reads the commons database from your wasteland config (set by gt wl join).
 Uses the clone-then-discard pattern: clones the commons database to a
 temporary directory, queries it, then deletes the clone.
 
@@ -56,8 +53,7 @@ func init() {
 }
 
 func runWLBrowse(cmd *cobra.Command, args []string) error {
-	townRoot, err := workspace.FindFromCwdOrError()
-	if err != nil {
+	if _, err := workspace.FindFromCwdOrError(); err != nil {
 		return fmt.Errorf("not in a Gas Town workspace: %w", err)
 	}
 
@@ -72,15 +68,8 @@ func runWLBrowse(cmd *cobra.Command, args []string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Read commons org/db from wasteland config (set by gt wl join)
 	commonsOrg := "hop"
 	commonsDB := "wl-commons"
-	if cfg, err := wasteland.LoadConfig(townRoot); err == nil {
-		if org, db, err := wasteland.ParseUpstream(cfg.Upstream); err == nil {
-			commonsOrg = org
-			commonsDB = db
-		}
-	}
 	cloneDir := filepath.Join(tmpDir, commonsDB)
 
 	remote := fmt.Sprintf("%s/%s", commonsOrg, commonsDB)
@@ -147,11 +136,7 @@ func renderWLBrowseTable(doltPath, cloneDir, query string) error {
 		return fmt.Errorf("running query: %w", err)
 	}
 
-	reader := csv.NewReader(strings.NewReader(string(output)))
-	rows, err := reader.ReadAll()
-	if err != nil {
-		return fmt.Errorf("parsing CSV output: %w", err)
-	}
+	rows := wlParseCSV(string(output))
 	if len(rows) <= 1 {
 		fmt.Println("No wanted items found matching your filters.")
 		return nil
@@ -180,6 +165,45 @@ func renderWLBrowseTable(doltPath, cloneDir, query string) error {
 	fmt.Print(tbl.Render())
 
 	return nil
+}
+
+func wlParseCSV(data string) [][]string {
+	var rows [][]string
+	for _, line := range strings.Split(strings.TrimSpace(data), "\n") {
+		if line == "" {
+			continue
+		}
+		rows = append(rows, wlParseCSVLine(line))
+	}
+	return rows
+}
+
+func wlParseCSVLine(line string) []string {
+	var fields []string
+	var field strings.Builder
+	inQuote := false
+
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		switch {
+		case ch == '"' && !inQuote:
+			inQuote = true
+		case ch == '"' && inQuote:
+			if i+1 < len(line) && line[i+1] == '"' {
+				field.WriteByte('"')
+				i++
+			} else {
+				inQuote = false
+			}
+		case ch == ',' && !inQuote:
+			fields = append(fields, field.String())
+			field.Reset()
+		default:
+			field.WriteByte(ch)
+		}
+	}
+	fields = append(fields, field.String())
+	return fields
 }
 
 func wlFormatPriority(pri string) string {
