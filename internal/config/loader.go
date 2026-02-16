@@ -1381,42 +1381,43 @@ func fillRuntimeDefaults(rc *RuntimeConfig) *RuntimeConfig {
 		}
 	}
 
-	// Apply defaults for required fields
-	if result.Command == "" {
-		result.Command = "claude"
+	// Resolve preset for data-driven defaults.
+	// Use provider if set, otherwise try to match by command name.
+	presetName := result.Provider
+	if presetName == "" && result.Command != "" {
+		presetName = result.Command
 	}
-	if result.Args == nil {
-		result.Args = []string{"--dangerously-skip-permissions"}
+	preset := GetAgentPresetByName(presetName)
+	if preset == nil {
+		preset = GetAgentPreset(AgentClaude) // fall back to Claude defaults
 	}
 
-	// Auto-fill Hooks defaults based on command for agents that support hooks.
-	// This ensures EnsureSettingsForRole creates the correct settings/plugin
-	// for custom agents defined in town/rig settings.
-	if result.Hooks == nil {
-		switch result.Command {
-		case "claude":
-			result.Hooks = &RuntimeHooksConfig{
-				Provider:     "claude",
-				Dir:          ".claude",
-				SettingsFile: defaultHooksFile("claude"),
-			}
-		case "opencode":
-			result.Hooks = &RuntimeHooksConfig{
-				Provider:     "opencode",
-				Dir:          ".opencode/plugin",
-				SettingsFile: "gastown.js",
-			}
+	// Apply defaults for required fields from preset
+	if result.Command == "" && preset != nil {
+		result.Command = preset.Command
+	}
+	if result.Args == nil && preset != nil {
+		result.Args = append([]string(nil), preset.Args...)
+	}
+
+	// Auto-fill Hooks defaults from preset for agents that support hooks.
+	if result.Hooks == nil && preset != nil && preset.HooksProvider != "" {
+		result.Hooks = &RuntimeHooksConfig{
+			Provider:     preset.HooksProvider,
+			Dir:          preset.HooksDir,
+			SettingsFile: preset.HooksSettingsFile,
 		}
 	}
 
-	// Auto-fill Env defaults for opencode (YOLO mode).
-	// Custom opencode agents need OPENCODE_PERMISSION to run autonomously.
-	if result.Command == "opencode" {
+	// Auto-fill Env defaults from preset.
+	if preset != nil && len(preset.Env) > 0 {
 		if result.Env == nil {
 			result.Env = make(map[string]string)
 		}
-		if _, ok := result.Env["OPENCODE_PERMISSION"]; !ok {
-			result.Env["OPENCODE_PERMISSION"] = `{"*":"allow"}`
+		for k, v := range preset.Env {
+			if _, ok := result.Env[k]; !ok {
+				result.Env[k] = v
+			}
 		}
 	}
 

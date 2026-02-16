@@ -624,20 +624,18 @@ func normalizeRuntimeConfig(rc *RuntimeConfig) *RuntimeConfig {
 }
 
 func defaultRuntimeCommand(provider string) string {
-	switch provider {
-	case "codex":
-		return "codex"
-	case "gemini":
-		return "gemini"
-	case "opencode":
-		return "opencode"
-	case "copilot":
-		return "copilot"
-	case "generic":
+	if provider == "generic" {
 		return ""
-	default:
-		return resolveClaudePath()
 	}
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		cmd := preset.Command
+		// Resolve claude path for Claude preset (handles alias installations)
+		if preset.Name == AgentClaude && cmd == "claude" {
+			return resolveClaudePath()
+		}
+		return cmd
+	}
+	return resolveClaudePath() // fallback for unknown providers
 }
 
 // resolveClaudePath finds the claude binary, checking PATH first then common installation locations.
@@ -666,117 +664,67 @@ func resolveClaudePath() string {
 }
 
 func defaultRuntimeArgs(provider string) []string {
-	switch provider {
-	case "claude":
-		return []string{"--dangerously-skip-permissions"}
-	case "copilot":
-		return []string{"--yolo"}
-	default:
-		return nil
+	if preset := GetAgentPresetByName(provider); preset != nil && preset.Args != nil {
+		return append([]string(nil), preset.Args...) // copy to avoid mutation
 	}
+	return nil
 }
 
 func defaultPromptMode(provider string) string {
-	switch provider {
-	case "codex":
-		return "none"
-	case "opencode":
-		return "none"
-	case "copilot":
-		return "arg"
-	default:
-		return "arg"
+	if preset := GetAgentPresetByName(provider); preset != nil && preset.PromptMode != "" {
+		return preset.PromptMode
 	}
+	return "arg"
 }
 
 func defaultSessionIDEnv(provider string) string {
-	switch provider {
-	case "claude":
-		return "CLAUDE_SESSION_ID"
-	case "gemini":
-		return "GEMINI_SESSION_ID"
-	default:
-		return ""
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.SessionIDEnv
 	}
+	return ""
 }
 
 func defaultConfigDirEnv(provider string) string {
-	if provider == "claude" {
-		return "CLAUDE_CONFIG_DIR"
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.ConfigDirEnv
 	}
 	return ""
 }
 
 func defaultHooksProvider(provider string) string {
-	switch provider {
-	case "claude":
-		return "claude"
-	case "gemini":
-		return "gemini"
-	case "opencode":
-		return "opencode"
-	case "copilot":
-		return "copilot"
-	default:
-		return "none"
+	if preset := GetAgentPresetByName(provider); preset != nil && preset.HooksProvider != "" {
+		return preset.HooksProvider
 	}
+	return "none"
 }
 
 func defaultHooksDir(provider string) string {
-	switch provider {
-	case "claude":
-		return ".claude"
-	case "gemini":
-		return ".gemini"
-	case "opencode":
-		return ".opencode/plugin"
-	case "copilot":
-		return ".copilot"
-	default:
-		return ""
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.HooksDir
 	}
+	return ""
 }
 
 func defaultHooksFile(provider string) string {
-	switch provider {
-	case "claude":
-		// Use settings.json installed via --settings flag in a gastown-managed
-		// parent directory, keeping customer repos untouched.
-		return "settings.json"
-	case "gemini":
-		return "settings.json"
-	case "opencode":
-		return "gastown.js"
-	case "copilot":
-		return "copilot-instructions.md"
-	default:
-		return ""
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.HooksSettingsFile
 	}
+	return ""
 }
 
 // defaultHooksInformational returns true for providers whose hooks are instructions
 // files only (not executable lifecycle hooks). For these providers, Gas Town sends
 // startup fallback commands (gt prime) via nudge since hooks won't auto-run.
 func defaultHooksInformational(provider string) bool {
-	return provider == "copilot"
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.HooksInformational
+	}
+	return false
 }
 
 func defaultProcessNames(provider, command string) []string {
-	if provider == "claude" {
-		return []string{"node"}
-	}
-	if provider == "gemini" {
-		return []string{"gemini"}
-	}
-	if provider == "opencode" {
-		// OpenCode runs as Node.js process, need both for IsAgentRunning detection.
-		// tmux pane_current_command may show "node" or "opencode" depending on how invoked.
-		return []string{"opencode", "node"}
-	}
-	if provider == "copilot" {
-		// Copilot CLI reports as "copilot" in tmux pane_current_command
-		// despite being a Node.js application.
-		return []string{"copilot"}
+	if preset := GetAgentPresetByName(provider); preset != nil && len(preset.ProcessNames) > 0 {
+		return append([]string(nil), preset.ProcessNames...) // copy to avoid mutation
 	}
 	if command != "" {
 		return []string{filepath.Base(command)}
@@ -785,46 +733,22 @@ func defaultProcessNames(provider, command string) []string {
 }
 
 func defaultReadyPromptPrefix(provider string) string {
-	if provider == "claude" {
-		// Claude Code uses ❯ (U+276F) as the prompt character
-		return "❯ "
-	}
-	if provider == "copilot" {
-		// Copilot CLI also uses ❯ (U+276F) as the prompt character
-		return "❯ "
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.ReadyPromptPrefix
 	}
 	return ""
 }
 
 func defaultReadyDelayMs(provider string) int {
-	if provider == "claude" {
-		return 10000
-	}
-	if provider == "gemini" {
-		// Estimated delay — needs tuning after real Gemini CLI testing.
-		return 5000
-	}
-	if provider == "codex" {
-		return 3000
-	}
-	if provider == "opencode" {
-		// OpenCode requires delay-based detection because its TUI uses
-		// box-drawing characters (┃) that break prompt prefix matching.
-		// 8000ms provides reliable startup detection across models.
-		return 8000
-	}
-	if provider == "copilot" {
-		// Copilot has prompt prefix detection via ❯ but needs a fallback delay
-		// for startup commands (gt prime) since it doesn't have executable hooks.
-		return 5000
+	if preset := GetAgentPresetByName(provider); preset != nil {
+		return preset.ReadyDelayMs
 	}
 	return 0
 }
 
 func defaultInstructionsFile(provider string) string {
-	// Claude uses CLAUDE.md; all other agents use AGENTS.md.
-	if provider == "claude" {
-		return "CLAUDE.md"
+	if preset := GetAgentPresetByName(provider); preset != nil && preset.InstructionsFile != "" {
+		return preset.InstructionsFile
 	}
 	return "AGENTS.md"
 }

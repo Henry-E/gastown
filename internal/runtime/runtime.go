@@ -2,12 +2,12 @@
 package runtime
 
 import (
-	"github.com/steveyegge/gastown/internal/cli"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/steveyegge/gastown/internal/claude"
+	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/copilot"
 	"github.com/steveyegge/gastown/internal/gemini"
@@ -15,6 +15,27 @@ import (
 	"github.com/steveyegge/gastown/internal/templates/commands"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
+
+func init() {
+	// Register hook installers for all agents that support hooks.
+	// This replaces the provider switch statement in EnsureSettingsForRole.
+	// Adding a new hook-supporting agent = adding a registration here.
+	config.RegisterHookInstaller("claude", func(settingsDir, workDir, role, hooksDir, hooksFile string) error {
+		return claude.EnsureSettingsForRoleAt(settingsDir, role, hooksDir, hooksFile)
+	})
+	config.RegisterHookInstaller("gemini", func(settingsDir, workDir, role, hooksDir, hooksFile string) error {
+		// Gemini CLI has no --settings flag; install settings in workDir.
+		return gemini.EnsureSettingsForRoleAt(workDir, role, hooksDir, hooksFile)
+	})
+	config.RegisterHookInstaller("opencode", func(settingsDir, workDir, role, hooksDir, hooksFile string) error {
+		// OpenCode plugins stay in workDir — no --settings equivalent.
+		return opencode.EnsurePluginAt(workDir, hooksDir, hooksFile)
+	})
+	config.RegisterHookInstaller("copilot", func(settingsDir, workDir, role, hooksDir, hooksFile string) error {
+		// Copilot custom instructions stay in workDir — no --settings equivalent.
+		return copilot.EnsureSettingsAt(workDir, hooksDir, hooksFile)
+	})
+}
 
 // EnsureSettingsForRole provisions all agent-specific configuration for a role.
 // settingsDir is where provider settings (e.g., .claude/settings.json) are installed.
@@ -36,28 +57,10 @@ func EnsureSettingsForRole(settingsDir, workDir, role string, rc *config.Runtime
 		return nil
 	}
 
-	// 1. Provider-specific settings (settings.json for Claude, plugin for OpenCode)
-	// Settings are installed to settingsDir (gastown-managed parent for rig roles).
-	switch provider {
-	case "claude":
-		if err := claude.EnsureSettingsForRoleAt(settingsDir, role, rc.Hooks.Dir, rc.Hooks.SettingsFile); err != nil {
-			return err
-		}
-	case "gemini":
-		// Gemini CLI has no --settings flag; install settings in workDir (like OpenCode).
-		if err := gemini.EnsureSettingsForRoleAt(workDir, role, rc.Hooks.Dir, rc.Hooks.SettingsFile); err != nil {
-			return err
-		}
-	case "opencode":
-		// OpenCode plugins stay in workDir — OpenCode has no --settings equivalent
-		// for path redirection, so it discovers plugins from the working directory.
-		if err := opencode.EnsurePluginAt(workDir, rc.Hooks.Dir, rc.Hooks.SettingsFile); err != nil {
-			return err
-		}
-	case "copilot":
-		// Copilot custom instructions stay in workDir — Copilot has no --settings equivalent
-		// for path redirection, so it discovers instructions from the working directory.
-		if err := copilot.EnsureSettingsAt(workDir, rc.Hooks.Dir, rc.Hooks.SettingsFile); err != nil {
+	// 1. Provider-specific settings (settings.json for Claude, plugin for OpenCode, etc.)
+	// Hook installers are registered in init() — no switch statement needed.
+	if installer := config.GetHookInstaller(provider); installer != nil {
+		if err := installer(settingsDir, workDir, role, rc.Hooks.Dir, rc.Hooks.SettingsFile); err != nil {
 			return err
 		}
 	}
@@ -74,13 +77,23 @@ func EnsureSettingsForRole(settingsDir, workDir, role string, rc *config.Runtime
 }
 
 // SessionIDFromEnv returns the runtime session ID, if present.
-// It checks GT_SESSION_ID_ENV first, then falls back to CLAUDE_SESSION_ID.
+// It checks GT_SESSION_ID_ENV first, then resolves from the current agent's preset,
+// and falls back to CLAUDE_SESSION_ID for backwards compatibility.
 func SessionIDFromEnv() string {
 	if envName := os.Getenv("GT_SESSION_ID_ENV"); envName != "" {
 		if sessionID := os.Getenv(envName); sessionID != "" {
 			return sessionID
 		}
 	}
+	// Use the current agent's session ID env var from its preset
+	if agentName := os.Getenv("GT_AGENT"); agentName != "" {
+		if preset := config.GetAgentPresetByName(agentName); preset != nil && preset.SessionIDEnv != "" {
+			if sessionID := os.Getenv(preset.SessionIDEnv); sessionID != "" {
+				return sessionID
+			}
+		}
+	}
+	// Backwards-compatible fallback for sessions without GT_AGENT
 	return os.Getenv("CLAUDE_SESSION_ID")
 }
 

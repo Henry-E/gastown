@@ -271,9 +271,9 @@ func ensureAgentReady(sessionName string) error {
 		}
 	}
 
-	// Claude-only: accept bypass permissions warning if present
+	// Accept bypass permissions warning if the agent emits one on startup
 	agentName, _ := t.GetEnvironment(sessionName, "GT_AGENT")
-	if agentName == "" || agentName == "claude" {
+	if shouldAcceptPermissionWarning(agentName) {
 		_ = t.AcceptBypassPermissionsWarning(sessionName)
 	}
 
@@ -755,4 +755,17 @@ func loadRigCommandVars(townRoot, rig string) []string {
 		vars = append(vars, fmt.Sprintf("build_command=%s", mq.BuildCommand))
 	}
 	return vars
+}
+
+// shouldAcceptPermissionWarning checks if the agent emits a bypass-permissions
+// warning on startup that needs to be acknowledged via tmux.
+func shouldAcceptPermissionWarning(agentName string) bool {
+	if agentName == "" {
+		agentName = "claude" // Default sessions without GT_AGENT are Claude
+	}
+	preset := config.GetAgentPresetByName(agentName)
+	if preset == nil {
+		return false
+	}
+	return preset.EmitsPermissionWarning
 }

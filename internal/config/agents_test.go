@@ -754,13 +754,13 @@ func TestOpenCodeProviderDefaults(t *testing.T) {
 		t.Errorf("defaultReadyDelayMs(opencode) = %d, want 8000", delay)
 	}
 
-	// Test defaultProcessNames for opencode
+	// Test defaultProcessNames for opencode (from preset: opencode, node, bun)
 	names := defaultProcessNames("opencode", "opencode")
-	if len(names) != 2 {
-		t.Errorf("defaultProcessNames(opencode) length = %d, want 2", len(names))
+	if len(names) != 3 {
+		t.Errorf("defaultProcessNames(opencode) length = %d, want 3", len(names))
 	}
-	if names[0] != "opencode" || names[1] != "node" {
-		t.Errorf("defaultProcessNames(opencode) = %v, want [opencode, node]", names)
+	if len(names) >= 3 && (names[0] != "opencode" || names[1] != "node" || names[2] != "bun") {
+		t.Errorf("defaultProcessNames(opencode) = %v, want [opencode, node, bun]", names)
 	}
 
 	// Test defaultInstructionsFile for opencode
