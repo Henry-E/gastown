@@ -1,6 +1,8 @@
 package polecat
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -423,8 +425,6 @@ func TestValidateSessionName(t *testing.T) {
 
 func TestHasValidWorktree(t *testing.T) {
 	root := t.TempDir()
-	r := &rig.Rig{Name: "gastown", Path: root}
-	m := NewSessionManager(tmux.NewTmux(), r)
 
 	tests := []struct {
 		name  string
@@ -464,7 +464,7 @@ func TestHasValidWorktree(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(root, "test-worktree-"+tc.name)
 			tc.setup(dir)
-			got := m.hasValidWorktree(dir)
+			got := HasValidWorktree(dir)
 			if got != tc.want {
 				t.Errorf("hasValidWorktree(%q) = %v, want %v", dir, got, tc.want)
 			}
@@ -472,10 +472,11 @@ func TestHasValidWorktree(t *testing.T) {
 	}
 }
 
-// TestStartSessionStateMatrix verifies that Start() classifies existing
-// sessions correctly. We test hasValidWorktree (the filesystem part) here
-// since the tmux-dependent paths require a live session.
-func TestStartSessionStateMatrix(t *testing.T) {
+// TestWorktreeStateClassification verifies the filesystem-level worktree
+// validation used by Start()'s session state classification. The tmux-dependent
+// paths (IsAgentAlive, GetPaneID, KillSessionWithProcesses) require a live
+// session and are not covered here.
+func TestWorktreeStateClassification(t *testing.T) {
 	root := t.TempDir()
 	r := &rig.Rig{Name: "gastown", Path: root}
 	m := NewSessionManager(tmux.NewTmux(), r)
@@ -484,7 +485,7 @@ func TestStartSessionStateMatrix(t *testing.T) {
 	t.Run("stale: no .git in worktree", func(t *testing.T) {
 		dir := filepath.Join(root, "stale-wt")
 		_ = os.MkdirAll(dir, 0755)
-		if m.hasValidWorktree(dir) {
+		if HasValidWorktree(dir) {
 			t.Error("stale session should not have valid worktree (no .git)")
 		}
 	})
@@ -492,7 +493,7 @@ func TestStartSessionStateMatrix(t *testing.T) {
 	// State: zombie — directory doesn't exist
 	t.Run("zombie: worktree directory missing", func(t *testing.T) {
 		dir := filepath.Join(root, "nonexistent-wt")
-		if m.hasValidWorktree(dir) {
+		if HasValidWorktree(dir) {
 			t.Error("zombie session should not have valid worktree (missing dir)")
 		}
 	})
@@ -502,7 +503,7 @@ func TestStartSessionStateMatrix(t *testing.T) {
 		dir := filepath.Join(root, "valid-wt")
 		_ = os.MkdirAll(dir, 0755)
 		_ = os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: ../../../.git/worktrees/foo"), 0644)
-		if !m.hasValidWorktree(dir) {
+		if !HasValidWorktree(dir) {
 			t.Error("reusable session should have valid worktree")
 		}
 	})
@@ -513,7 +514,7 @@ func TestStartSessionStateMatrix(t *testing.T) {
 		_ = os.MkdirAll(customDir, 0755)
 		_ = os.WriteFile(filepath.Join(customDir, ".git"), []byte("gitdir: ../../.git/worktrees/custom"), 0644)
 		// hasValidWorktree should use customDir, not m.clonePath("somepolecat")
-		if !m.hasValidWorktree(customDir) {
+		if !HasValidWorktree(customDir) {
 			t.Error("custom WorkDir with .git should be recognized as valid worktree")
 		}
 		// Verify clonePath for the same polecat is different (sanity check)
@@ -530,6 +531,17 @@ func TestStartSessionStateMatrix(t *testing.T) {
 		}
 		if ErrSessionReused == ErrSessionRunning {
 			t.Error("ErrSessionReused must differ from ErrSessionRunning")
+		}
+	})
+
+	// ErrSessionReused works with errors.Is (callers must use errors.Is)
+	t.Run("ErrSessionReused works with errors.Is", func(t *testing.T) {
+		if !errors.Is(ErrSessionReused, ErrSessionReused) {
+			t.Error("errors.Is(ErrSessionReused, ErrSessionReused) must be true")
+		}
+		wrapped := fmt.Errorf("context: %w", ErrSessionReused)
+		if !errors.Is(wrapped, ErrSessionReused) {
+			t.Error("errors.Is must match wrapped ErrSessionReused")
 		}
 	})
 }
