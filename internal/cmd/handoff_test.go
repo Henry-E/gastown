@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -96,6 +97,65 @@ func TestSessionWorkDir(t *testing.T) {
 				t.Errorf("sessionWorkDir() = %q, want %q", gotDir, tt.wantDir)
 			}
 		})
+	}
+}
+
+func TestBuildRestartCommand_UsesRoleAgentConfigWhenNoOverride(t *testing.T) {
+	setupHandoffTestRegistry(t)
+
+	origCwd, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(origCwd) })
+
+	origGTAgent := os.Getenv("GT_AGENT")
+	t.Cleanup(func() { _ = os.Setenv("GT_AGENT", origGTAgent) })
+	_ = os.Setenv("GT_AGENT", "")
+
+	townRoot := t.TempDir()
+	mayorDir := filepath.Join(townRoot, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatalf("creating mayor dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "town.json"), []byte(`{"name":"test-town"}`), 0644); err != nil {
+		t.Fatalf("creating town marker: %v", err)
+	}
+
+	rigPath := filepath.Join(townRoot, "gastown")
+	if err := os.MkdirAll(filepath.Join(rigPath, "witness"), 0755); err != nil {
+		t.Fatalf("creating rig dirs: %v", err)
+	}
+
+	settings := config.NewTownSettings()
+	settings.DefaultAgent = "claude-opus"
+	settings.Agents = map[string]*config.RuntimeConfig{
+		"claude-opus": {
+			Command: "claude",
+			Args:    []string{"--dangerously-skip-permissions", "--model", "opus"},
+		},
+		"claude-haiku": {
+			Command: "claude",
+			Args:    []string{"--dangerously-skip-permissions", "--model", "haiku"},
+		},
+	}
+	settings.RoleAgents = map[string]string{
+		"witness": "claude-haiku",
+	}
+	if err := config.SaveTownSettings(config.TownSettingsPath(townRoot), settings); err != nil {
+		t.Fatalf("saving town settings: %v", err)
+	}
+
+	if err := os.Chdir(rigPath); err != nil {
+		t.Fatalf("chdir rig: %v", err)
+	}
+
+	cmd, err := buildRestartCommand("gt-witness")
+	if err != nil {
+		t.Fatalf("buildRestartCommand() error = %v", err)
+	}
+	if !strings.Contains(cmd, "--model haiku") {
+		t.Fatalf("expected witness handoff to use role_agents haiku, got command: %q", cmd)
+	}
+	if strings.Contains(cmd, "--model opus") {
+		t.Fatalf("expected witness handoff not to use default opus, got command: %q", cmd)
 	}
 }
 

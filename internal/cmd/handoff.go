@@ -496,6 +496,7 @@ func buildRestartCommand(sessionName string) (string, error) {
 		return "", fmt.Errorf("cannot parse session name %q: %w", sessionName, err)
 	}
 	gtRole := identity.GTRole()
+	simpleRole := config.ExtractSimpleRole(gtRole)
 
 	// Derive rigPath from session identity for --settings flag resolution
 	rigPath := ""
@@ -538,14 +539,18 @@ func buildRestartCommand(sessionName string) (string, error) {
 			return "", fmt.Errorf("resolving agent config: %w", err)
 		}
 	} else {
-		runtimeCmd = config.GetRuntimeCommandWithPrompt(rigPath, beacon)
+		if simpleRole != "" {
+			runtimeConfig := config.ResolveRoleAgentConfig(simpleRole, townRoot, rigPath)
+			runtimeCmd = runtimeConfig.BuildCommandWithPrompt(beacon)
+		} else {
+			runtimeCmd = config.GetRuntimeCommandWithPrompt(rigPath, beacon)
+		}
 	}
 
 	// Build environment exports - role vars first, then Claude vars
 	var exports []string
 	var agentEnv map[string]string // agent config Env (rc.toml [agents.X.env])
 	if gtRole != "" {
-		simpleRole := config.ExtractSimpleRole(gtRole)
 		// When GT_AGENT is set, resolve config with the override so we pick up
 		// the active agent's env (e.g., NODE_OPTIONS from [agents.X.env]).
 		// Otherwise, fall back to role-based resolution.
