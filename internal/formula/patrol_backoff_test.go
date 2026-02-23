@@ -195,3 +195,35 @@ func TestPatrolFormulasHaveWispGC(t *testing.T) {
 		})
 	}
 }
+
+// TestRefineryPatrolDefaultTestCommandIsEmpty ensures the refinery patrol formula
+// does not assume a Go test command when rig settings are missing.
+//
+// Why this matters:
+// buildRefineryPatrolVars intentionally omits test_command when settings/config.json
+// is missing or has no merge_queue block. In that case, formula defaults apply.
+// If the formula default is "go test ./...", non-Go rigs can fail in run-tests and
+// leave merge queue items unprocessed.
+func TestRefineryPatrolDefaultTestCommandIsEmpty(t *testing.T) {
+	content, err := formulasFS.ReadFile("formulas/mol-refinery-patrol.formula.toml")
+	if err != nil {
+		t.Fatalf("reading mol-refinery-patrol.formula.toml: %v", err)
+	}
+
+	f, err := Parse(content)
+	if err != nil {
+		t.Fatalf("parsing mol-refinery-patrol.formula.toml: %v", err)
+	}
+
+	testCommandVar, ok := f.Vars["test_command"]
+	if !ok {
+		t.Fatalf("mol-refinery-patrol missing vars.test_command")
+	}
+
+	if testCommandVar.Default != "" {
+		t.Fatalf(
+			"vars.test_command default = %q, want empty string to avoid blocking merge queue processing when rig settings do not provide test_command",
+			testCommandVar.Default,
+		)
+	}
+}

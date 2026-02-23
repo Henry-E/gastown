@@ -846,7 +846,7 @@ func ensureFormulaRequiredVars(formulaName string, vars []string) []string {
 		{"setup_command", ""},
 		{"typecheck_command", ""},
 		{"lint_command", ""},
-		{"test_command", "go test ./..."},
+		{"test_command", ""},
 		{"build_command", ""},
 	}
 	for _, item := range requiredDefaults {

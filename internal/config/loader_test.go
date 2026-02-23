@@ -403,8 +403,8 @@ func TestDefaultMergeQueueConfig(t *testing.T) {
 	if !cfg.IsRunTestsEnabled() {
 		t.Error("IsRunTestsEnabled should be true by default")
 	}
-	if cfg.TestCommand != "go test ./..." {
-		t.Errorf("TestCommand = %q, want 'go test ./...'", cfg.TestCommand)
+	if cfg.TestCommand != "" {
+		t.Errorf("TestCommand = %q, want empty string", cfg.TestCommand)
 	}
 	if !cfg.IsDeleteMergedBranchesEnabled() {
 		t.Error("IsDeleteMergedBranchesEnabled should be true by default")

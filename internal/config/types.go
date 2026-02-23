@@ -956,7 +956,7 @@ func DefaultMergeQueueConfig() *MergeQueueConfig {
 		IntegrationBranchRefineryEnabled: boolPtr(true),
 		OnConflict:                       OnConflictAssignBack,
 		RunTests:                         boolPtr(true),
-		TestCommand:                      "go test ./...",
+		TestCommand:                      "",
 		DeleteMergedBranches:             boolPtr(true),
 		RetryFlakyTests:                  1,
 		PollInterval:                     "30s",
