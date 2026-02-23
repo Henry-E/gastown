@@ -123,13 +123,12 @@ func TestBuildRefineryPatrolVars_FullConfig(t *testing.T) {
 	vars := buildRefineryPatrolVars(ctx)
 
 	// DefaultMergeQueueConfig: refinery_enabled=true, auto_land=false, run_tests=true,
-	// test_command="go test ./...", target_branch="main" (from rig config), delete_merged_branches=true
-	// New commands (setup, typecheck, lint, build) default to empty = omitted
+	// target_branch="main" (from rig config), delete_merged_branches=true.
+	// All command vars default to empty and should be omitted.
 	expected := map[string]string{
 		"integration_branch_refinery_enabled": "true",
 		"integration_branch_auto_land":        "false",
 		"run_tests":                           "true",
-		"test_command":                        "go test ./...",
 		"target_branch":                       "main",
 		"delete_merged_branches":              "true",
 	}
@@ -154,7 +153,7 @@ func TestBuildRefineryPatrolVars_FullConfig(t *testing.T) {
 	}
 
 	// Verify empty commands are NOT included
-	for _, shouldBeAbsent := range []string{"setup_command", "typecheck_command", "lint_command", "build_command"} {
+	for _, shouldBeAbsent := range []string{"setup_command", "typecheck_command", "lint_command", "test_command", "build_command"} {
 		if _, ok := varMap[shouldBeAbsent]; ok {
 			t.Errorf("%q should be omitted when empty", shouldBeAbsent)
 		}
@@ -177,6 +176,7 @@ func TestBuildRefineryPatrolVars_AllCommandsSet(t *testing.T) {
 	mq.SetupCommand = "pnpm install"
 	mq.TypecheckCommand = "tsc --noEmit"
 	mq.LintCommand = "eslint ."
+	mq.TestCommand = "pnpm test"
 	mq.BuildCommand = "pnpm build"
 	settings := config.RigSettings{
 		Type:       "rig-settings",
@@ -207,7 +207,7 @@ func TestBuildRefineryPatrolVars_AllCommandsSet(t *testing.T) {
 		"setup_command":     "pnpm install",
 		"typecheck_command": "tsc --noEmit",
 		"lint_command":      "eslint .",
-		"test_command":      "go test ./...",
+		"test_command":      "pnpm test",
 		"build_command":     "pnpm build",
 	}
 	for key, want := range commandExpected {
