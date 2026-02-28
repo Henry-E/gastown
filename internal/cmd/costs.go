@@ -27,7 +27,6 @@ var (
 	costsJSON    bool
 	costsToday   bool
 	costsWeek    bool
-	costsSince   string
 	costsHours   int
 	costsByRole  bool
 	costsByRig   bool
@@ -59,7 +58,6 @@ Examples:
   gt costs              # Live costs from running sessions
   gt costs --today      # Today's costs from log file (not yet digested)
   gt costs --week       # This week's costs from digest beads + today's log
-  gt costs --since 4h   # Costs in the last 4 hours
   gt costs --hours 1    # Costs in the last hour
   gt costs --by-role    # Breakdown by role (polecat, witness, etc.)
   gt costs --by-rig     # Breakdown by rig
@@ -137,7 +135,6 @@ func init() {
 	costsCmd.Flags().BoolVar(&costsJSON, "json", false, "Output as JSON")
 	costsCmd.Flags().BoolVar(&costsToday, "today", false, "Show today's total from session events")
 	costsCmd.Flags().BoolVar(&costsWeek, "week", false, "Show this week's total from session events")
-	costsCmd.Flags().StringVar(&costsSince, "since", "", "Show costs from the last duration (e.g. 30m, 4h, 1d)")
 	costsCmd.Flags().IntVar(&costsHours, "hours", 0, "Show costs from the last N hours")
 	costsCmd.Flags().BoolVar(&costsByRole, "by-role", false, "Show breakdown by role")
 	costsCmd.Flags().BoolVar(&costsByRig, "by-rig", false, "Show breakdown by rig")
@@ -245,7 +242,7 @@ var modelPricing = map[string]struct {
 
 func runCosts(cmd *cobra.Command, args []string) error {
 	// If querying ledger, use ledger functions
-	if costsToday || costsWeek || costsByRole || costsByRig || strings.TrimSpace(costsSince) != "" || costsHoursFlagChanged(cmd) {
+	if costsToday || costsWeek || costsByRole || costsByRig || costsHoursFlagChanged(cmd) {
 		return runCostsFromLedger(cmd)
 	}
 
@@ -424,25 +421,12 @@ func runCostsFromLedger(cmd *cobra.Command) error {
 }
 
 func resolveCostsLookback(cmd *cobra.Command, now time.Time) (time.Time, string, bool, error) {
-	since := strings.TrimSpace(costsSince)
 	hoursChanged := costsHoursFlagChanged(cmd)
 
-	if since != "" && hoursChanged {
-		return time.Time{}, "", false, fmt.Errorf("--since and --hours are mutually exclusive")
-	}
-	if (since != "" || hoursChanged) && (costsToday || costsWeek) {
-		return time.Time{}, "", false, fmt.Errorf("--since/--hours cannot be combined with --today or --week")
-	}
-
-	if since != "" {
-		dur, err := parseCostsSinceDuration(since)
-		if err != nil {
-			return time.Time{}, "", false, fmt.Errorf("invalid --since value %q: %w", since, err)
-		}
-		return now.Add(-dur), "last " + krcFormatDuration(dur), true, nil
-	}
-
 	if hoursChanged {
+		if costsToday || costsWeek {
+			return time.Time{}, "", false, fmt.Errorf("--hours cannot be combined with --today or --week")
+		}
 		if costsHours <= 0 {
 			return time.Time{}, "", false, fmt.Errorf("--hours must be greater than 0")
 		}
@@ -451,17 +435,6 @@ func resolveCostsLookback(cmd *cobra.Command, now time.Time) (time.Time, string,
 	}
 
 	return time.Time{}, "", false, nil
-}
-
-func parseCostsSinceDuration(raw string) (time.Duration, error) {
-	dur, err := krcParseDuration(strings.ToLower(strings.TrimSpace(raw)))
-	if err != nil {
-		return 0, err
-	}
-	if dur <= 0 {
-		return 0, fmt.Errorf("duration must be greater than 0")
-	}
-	return dur, nil
 }
 
 // SessionEvent represents a session.ended event from beads.

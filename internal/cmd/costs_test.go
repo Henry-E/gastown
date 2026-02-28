@@ -28,7 +28,6 @@ func setupCostsFlagState(t *testing.T) *cobra.Command {
 	oldJSON := costsJSON
 	oldToday := costsToday
 	oldWeek := costsWeek
-	oldSince := costsSince
 	oldHours := costsHours
 	oldByRole := costsByRole
 	oldByRig := costsByRig
@@ -37,7 +36,6 @@ func setupCostsFlagState(t *testing.T) *cobra.Command {
 	costsJSON = false
 	costsToday = false
 	costsWeek = false
-	costsSince = ""
 	costsHours = 0
 	costsByRole = false
 	costsByRig = false
@@ -47,7 +45,6 @@ func setupCostsFlagState(t *testing.T) *cobra.Command {
 		costsJSON = oldJSON
 		costsToday = oldToday
 		costsWeek = oldWeek
-		costsSince = oldSince
 		costsHours = oldHours
 		costsByRole = oldByRole
 		costsByRig = oldByRig
@@ -333,26 +330,6 @@ func TestCostDigestPayload_ExcludesSessions(t *testing.T) {
 	}
 }
 
-func TestResolveCostsLookback_Since(t *testing.T) {
-	cmd := setupCostsFlagState(t)
-	costsSince = "30m"
-
-	now := time.Date(2026, time.February, 28, 12, 0, 0, 0, time.UTC)
-	cutoff, period, hasLookback, err := resolveCostsLookback(cmd, now)
-	if err != nil {
-		t.Fatalf("resolveCostsLookback returned error: %v", err)
-	}
-	if !hasLookback {
-		t.Fatalf("expected hasLookback=true")
-	}
-	if !cutoff.Equal(now.Add(-30 * time.Minute)) {
-		t.Fatalf("cutoff = %s, want %s", cutoff, now.Add(-30*time.Minute))
-	}
-	if period != "last 30m" {
-		t.Fatalf("period = %q, want %q", period, "last 30m")
-	}
-}
-
 func TestResolveCostsLookback_Hours(t *testing.T) {
 	cmd := setupCostsFlagState(t)
 	if err := cmd.Flags().Set("hours", "4"); err != nil {
@@ -375,19 +352,34 @@ func TestResolveCostsLookback_Hours(t *testing.T) {
 	}
 }
 
-func TestResolveCostsLookback_MutualExclusion(t *testing.T) {
+func TestResolveCostsLookback_ConflictsWithTodayWeek(t *testing.T) {
 	cmd := setupCostsFlagState(t)
-	costsSince = "1h"
-	if err := cmd.Flags().Set("hours", "2"); err != nil {
+	costsToday = true
+	if err := cmd.Flags().Set("hours", "1"); err != nil {
 		t.Fatalf("setting --hours: %v", err)
 	}
 
 	_, _, _, err := resolveCostsLookback(cmd, time.Now())
 	if err == nil {
-		t.Fatal("expected error for --since with --hours")
+		t.Fatal("expected error for --hours with --today")
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("error = %q, expected mutually exclusive", err.Error())
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("error = %q, expected cannot be combined", err.Error())
+	}
+}
+
+func TestResolveCostsLookback_HoursMustBePositive(t *testing.T) {
+	cmd := setupCostsFlagState(t)
+	if err := cmd.Flags().Set("hours", "0"); err != nil {
+		t.Fatalf("setting --hours: %v", err)
+	}
+
+	_, _, _, err := resolveCostsLookback(cmd, time.Now())
+	if err == nil {
+		t.Fatal("expected error for --hours=0")
+	}
+	if !strings.Contains(err.Error(), "greater than 0") {
+		t.Fatalf("error = %q, expected greater than 0", err.Error())
 	}
 }
 
