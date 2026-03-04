@@ -75,6 +75,8 @@ func EnsureGitignorePatterns(worktreePath string) error {
 	// not in the customer repo worktree.
 	requiredPatterns := []string{
 		".runtime/",
+		"state.json",
+		".beads/redirect",
 		".claude/commands/",
 		".logs/",
 	}
