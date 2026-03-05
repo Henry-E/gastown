@@ -114,6 +114,7 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 		fallbackPath = filepath.Join(townRoot, rigName)
 	}
 	beadsPath := beads.ResolveHookDir(townRoot, agentBeadID, fallbackPath)
+	townBeadsDir := filepath.Join(townRoot, ".beads")
 
 	b := beads.New(beadsPath)
 
@@ -159,6 +160,13 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 	}
 
 	if hookedBeadID == "" {
+		// Self-heal stale agent slot state even when no hooked bead is visible.
+		if dryRun {
+			fmt.Printf("Would clear hook slot on agent %s\n", agentID)
+		} else if err := clearAgentHookBead(agentID, beadsPath, townBeadsDir); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: couldn't clear hook slot for %s: %v\n", agentID, err)
+		}
+
 		// hook_bead is empty, but there may be stale beads with status "hooked"
 		// still assigned to this agent (e.g., hook_bead was cleared but bead status
 		// wasn't updated). Clean them up so gt hook and gt unsling stay consistent.
@@ -210,11 +218,15 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 	}
 
 	if dryRun {
+		fmt.Printf("Would clear hook slot on agent %s\n", agentID)
 		fmt.Printf("Would unsling hooked bead from %s\n", agentID)
 		return nil
 	}
 
-	// No ClearHookBead call needed — agent bead hook slot is no longer maintained (hq-l6mm5).
+	// Clear agent hook slot first so hook-based resolution sees the unsling immediately.
+	if err := clearAgentHookBead(agentID, beadsPath, townBeadsDir); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: couldn't clear hook slot for %s: %v\n", agentID, err)
+	}
 
 	// Update hooked bead status from "hooked" back to "open".
 	// Previously, only the agent's hook slot was cleared but the bead itself stayed

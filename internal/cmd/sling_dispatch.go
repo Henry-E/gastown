@@ -18,24 +18,24 @@ import (
 // reconstructed into a SlingParams and passed to executeSling().
 type SlingParams struct {
 	// What to sling
-	BeadID      string   // Base bead
-	FormulaName string   // Formula to apply ("mol-polecat-work", user formula, or "")
-	RigName     string   // Target rig (always a rig for queue)
+	BeadID      string // Base bead
+	FormulaName string // Formula to apply ("mol-polecat-work", user formula, or "")
+	RigName     string // Target rig (always a rig for queue)
 
 	// CLI flag passthrough
-	Args       string   // --args
-	Vars       []string // --var (key=value pairs)
-	Merge      string   // --merge (convoy strategy)
-	BaseBranch string   // --base-branch
-	Account    string   // --account
-	Agent      string   // --agent
-	NoConvoy   bool     // --no-convoy
-	Owned      bool     // --owned
-	NoMerge    bool     // --no-merge
-	Force      bool     // --force
-	HookRawBead bool    // --hook-raw-bead
-	NoBoot     bool     // --no-boot
-	Mode       string   // --ralph: "" (normal) or "ralph"
+	Args        string   // --args
+	Vars        []string // --var (key=value pairs)
+	Merge       string   // --merge (convoy strategy)
+	BaseBranch  string   // --base-branch
+	Account     string   // --account
+	Agent       string   // --agent
+	NoConvoy    bool     // --no-convoy
+	Owned       bool     // --owned
+	NoMerge     bool     // --no-merge
+	Force       bool     // --force
+	HookRawBead bool     // --hook-raw-bead
+	NoBoot      bool     // --no-boot
+	Mode        string   // --ralph: "" (normal) or "ralph"
 
 	// Execution behavior (set by caller, not serialized to queue)
 	SkipCook         bool   // Batch optimization: formula already cooked
@@ -323,7 +323,12 @@ func executeSling(params SlingParams) (*SlingResult, error) {
 	_ = events.LogFeed(events.TypeSling, actor, events.SlingPayload(beadToHook, targetAgent))
 
 	// 9. Update agent hook_bead state
-	updateAgentHookBead(targetAgent, beadToHook, hookWorkDir, beadsDir)
+	if err := updateAgentHookBead(targetAgent, beadToHook, hookWorkDir, beadsDir); err != nil {
+		fmt.Printf("  %s Could not persist hook_bead slot: %v, cleaning up partial state...\n", style.Dim.Render("✗"), err)
+		rollbackSlingArtifactsFn(spawnInfo, beadToHook, hookWorkDir, convoyID)
+		result.ErrMsg = fmt.Sprintf("hook slot persist failed: %v", err)
+		return result, fmt.Errorf("persisting hook_bead slot: %w", err)
+	}
 
 	// 10. Store fields in bead (dispatcher, args, attached_molecule, no_merge, mode)
 	fieldUpdates := beadFieldUpdates{

@@ -192,7 +192,12 @@ func runSlingFormula(ctx context.Context, args []string) error {
 
 	// Update agent bead's hook_bead field (ZFC: agents track their current work)
 	// Note: formula slinging uses town root as workDir (no polecat-specific path)
-	updateAgentHookBead(targetAgent, wispRootID, "", townBeadsDir)
+	if err := updateAgentHookBead(targetAgent, wispRootID, "", townBeadsDir); err != nil {
+		if resolved.NewPolecatInfo != nil {
+			rollbackSlingArtifactsFn(resolved.NewPolecatInfo, wispRootID, "", "")
+		}
+		return fmt.Errorf("persisting hook_bead for %s: %w", targetAgent, err)
+	}
 
 	// Store all attachment fields in a single read-modify-write cycle.
 	// NOTE: For standalone formula sling, the wisp IS the work - do NOT store

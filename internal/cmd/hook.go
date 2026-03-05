@@ -396,7 +396,10 @@ func runHook(_ *cobra.Command, args []string) error {
 
 	// Update agent bead's hook_bead field (matches gt sling behavior)
 	// This ensures gt hook / gt mol status can find hooked work via the agent bead
-	updateAgentHookBead(agentID, beadID, workDir, townBeadsDir)
+	if err := updateAgentHookBead(agentID, beadID, workDir, townBeadsDir); err != nil {
+		// Non-fatal for manual hook; assignee/status still tracks work.
+		fmt.Fprintf(os.Stderr, "%s Warning: could not persist hook_bead slot: %v\n", style.Dim.Render("⚠"), err)
+	}
 
 	if targetAgent != "" {
 		fmt.Printf("  Use 'gt hook show %s' to verify\n", targetAgent)

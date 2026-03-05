@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -400,7 +401,15 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 				}
 				hookBead, err = hookB.Show(agentBead.HookBead)
 				if err != nil {
-					// Hook bead referenced but not found - report error but continue
+					if errors.Is(err, beads.ErrNotFound) {
+						// Self-heal stale slot pointing at a missing bead.
+						_ = clearAgentHookBead(target, workDir, filepath.Join(townRoot, ".beads"))
+					}
+					// Hook bead referenced but not found - continue to fallback query.
+					hookBead = nil
+				} else if hookBead.Status != beads.StatusHooked && hookBead.Status != "in_progress" {
+					// Slot points to non-active work; clear and continue to fallback query.
+					_ = clearAgentHookBead(target, workDir, filepath.Join(townRoot, ".beads"))
 					hookBead = nil
 				}
 			}

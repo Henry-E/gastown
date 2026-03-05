@@ -541,14 +541,90 @@ func agentIDToBeadID(agentID, townRoot string) string {
 	}
 }
 
-// updateAgentHookBead is a no-op. Previously set the hook_bead slot on agent beads
-// when work was slung, but this was redundant: the work bead itself tracks
-// status=hooked and assignee=<agent>. Agent bead slot writes caused warnings
-// in cross-database scenarios and added unnecessary Dolt load.
-// Removed per hq-l6mm5: replace bd slot hooks with direct bead tracking.
-func updateAgentHookBead(agentID, beadID, workDir, townBeadsDir string) {
-	// No-op: work bead status=hooked + assignee is the authoritative source.
-	// Agent bead hook_bead slot is no longer maintained.
+// resolveAgentHookSlotContext resolves agent bead identity and beads routing for slot writes.
+func resolveAgentHookSlotContext(agentID, workDir, townBeadsDir string) (agentBeadID, slotDir, resolvedBeadsDir string, err error) {
+	townRoot := ""
+	if townBeadsDir != "" {
+		townRoot = filepath.Dir(townBeadsDir)
+	}
+	if townRoot == "" {
+		townRoot, err = workspace.FindFromCwd()
+		if err != nil {
+			return "", "", "", fmt.Errorf("finding town root: %w", err)
+		}
+	}
+
+	agentBeadID = agentIDToBeadID(agentID, townRoot)
+	if agentBeadID == "" {
+		return "", "", "", fmt.Errorf("could not resolve agent bead for %s", agentID)
+	}
+
+	fallbackWorkDir := workDir
+	if fallbackWorkDir == "" {
+		trimmed := strings.TrimSuffix(agentID, "/")
+		parts := strings.Split(trimmed, "/")
+		rigName := ""
+		if len(parts) > 0 {
+			rigName = parts[0]
+		}
+		if rigName == "" || rigName == "mayor" || rigName == "deacon" {
+			fallbackWorkDir = townRoot
+		} else {
+			fallbackWorkDir = filepath.Join(townRoot, rigName)
+		}
+	}
+
+	slotDir = beads.ResolveHookDir(townRoot, agentBeadID, fallbackWorkDir)
+	if slotDir == "" {
+		slotDir = fallbackWorkDir
+	}
+	resolvedBeadsDir = beads.ResolveBeadsDir(slotDir)
+	if resolvedBeadsDir == "" {
+		return "", "", "", fmt.Errorf("could not resolve BEADS_DIR for %s", slotDir)
+	}
+
+	return agentBeadID, slotDir, resolvedBeadsDir, nil
+}
+
+// updateAgentHookBead writes hook_bead on the agent wisp and forces an immediate Dolt commit.
+// This ensures freshly spawned polecats can read their hook on startup.
+func updateAgentHookBead(agentID, beadID, workDir, townBeadsDir string) error {
+	if beadID == "" {
+		return fmt.Errorf("empty bead ID")
+	}
+
+	agentBeadID, slotDir, resolvedBeadsDir, err := resolveAgentHookSlotContext(agentID, workDir, townBeadsDir)
+	if err != nil {
+		return err
+	}
+
+	out, err := BdCmd("slot", "set", agentBeadID, "hook", beadID).
+		Dir(slotDir).
+		WithBeadsDir(resolvedBeadsDir).
+		WithAutoCommit().
+		CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("bd slot set %s hook %s: %w: %s", agentBeadID, beadID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// clearAgentHookBead clears hook_bead on the agent wisp and forces an immediate Dolt commit.
+func clearAgentHookBead(agentID, workDir, townBeadsDir string) error {
+	agentBeadID, slotDir, resolvedBeadsDir, err := resolveAgentHookSlotContext(agentID, workDir, townBeadsDir)
+	if err != nil {
+		return err
+	}
+
+	out, err := BdCmd("slot", "clear", agentBeadID, "hook").
+		Dir(slotDir).
+		WithBeadsDir(resolvedBeadsDir).
+		WithAutoCommit().
+		CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("bd slot clear %s hook: %w: %s", agentBeadID, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // wakeRigAgents wakes the witness for a rig after polecat dispatch.
@@ -690,7 +766,7 @@ func InstantiateFormulaOnBead(ctx context.Context, formulaName, beadID, title, h
 		if err := BdCmd("cook", formulaName).
 			Dir(formulaWorkDir).
 			WithGTRoot(townRoot).
-				Run(); err != nil {
+			Run(); err != nil {
 			// Retry with embedded formula
 			resolvedFormula, formulaCleanup = resolveFormulaToTempFile(formulaName)
 			if formulaCleanup != nil {

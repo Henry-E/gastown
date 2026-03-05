@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,11 +251,15 @@ func detectSessionState(ctx RoleContext) SessionState {
 				// (mirrors molecule_status.go and signal_stop.go patterns)
 				hookBeadDir := beads.ResolveHookDir(ctx.TownRoot, agentBead.HookBead, ctx.WorkDir)
 				hb := beads.New(hookBeadDir)
-				if hookBead, err := hb.Show(agentBead.HookBead); err == nil && hookBead != nil &&
-					(hookBead.Status == beads.StatusHooked || hookBead.Status == "in_progress") {
-					state.State = "autonomous"
-					state.HookedBead = agentBead.HookBead
-					return state
+				if hookBead, err := hb.Show(agentBead.HookBead); err == nil && hookBead != nil {
+					if hookBead.Status == beads.StatusHooked || hookBead.Status == "in_progress" {
+						state.State = "autonomous"
+						state.HookedBead = agentBead.HookBead
+						return state
+					}
+					_ = clearAgentHookBead(agentID, ctx.WorkDir, filepath.Join(ctx.TownRoot, ".beads"))
+				} else if errors.Is(err, beads.ErrNotFound) {
+					_ = clearAgentHookBead(agentID, ctx.WorkDir, filepath.Join(ctx.TownRoot, ".beads"))
 				}
 			}
 		}
