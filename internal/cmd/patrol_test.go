@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/steveyegge/gastown/internal/formula"
 )
 
 func TestExtractPatrolRole(t *testing.T) {
@@ -235,4 +237,79 @@ func TestBuildStepAudit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidatePatrolStepAudit(t *testing.T) {
+	fullOK := mustBuildAuditForTest(t, "mol-deacon-patrol", "OK")
+
+	tests := []struct {
+		name        string
+		stepsFlag   string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "missing steps is rejected",
+			stepsFlag:   "",
+			wantErr:     true,
+			errContains: "--steps is required",
+		},
+		{
+			name:        "unknown step is rejected",
+			stepsFlag:   fullOK + ",not-a-step:OK",
+			wantErr:     true,
+			errContains: "unknown=not-a-step",
+		},
+		{
+			name:        "invalid status is rejected",
+			stepsFlag:   strings.Replace(fullOK, "heartbeat:OK", "heartbeat:MAYBE", 1),
+			wantErr:     true,
+			errContains: "invalid_status=heartbeat:MAYBE",
+		},
+		{
+			name:        "missing canonical step is rejected",
+			stepsFlag:   strings.Replace(fullOK, "loop-or-exit:OK", "", 1),
+			wantErr:     true,
+			errContains: "missing=loop-or-exit",
+		},
+		{
+			name:      "full coverage passes",
+			stepsFlag: fullOK,
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePatrolStepAudit("mol-deacon-patrol", tt.stepsFlag)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+			if tt.wantErr && tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+func mustBuildAuditForTest(t *testing.T, formulaName, status string) string {
+	t.Helper()
+
+	content, err := formula.GetEmbeddedFormulaContent(formulaName)
+	if err != nil {
+		t.Fatalf("loading formula %s: %v", formulaName, err)
+	}
+	f, err := formula.Parse(content)
+	if err != nil {
+		t.Fatalf("parsing formula %s: %v", formulaName, err)
+	}
+
+	var entries []string
+	for _, stepID := range f.GetAllIDs() {
+		entries = append(entries, stepID+":"+status)
+	}
+	return strings.Join(entries, ",")
 }

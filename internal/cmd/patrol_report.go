@@ -3,11 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/deacon"
 	"github.com/steveyegge/gastown/internal/formula"
 	"github.com/steveyegge/gastown/internal/style"
 )
@@ -29,7 +31,8 @@ This replaces the old squash+new pattern with a single command that:
 
 The summary is stored on the patrol root wisp for audit purposes.
 The --steps flag records which patrol steps were executed vs skipped,
-making shortcutting visible in the ledger.
+making shortcutting visible in the ledger. For Deacon patrol, --steps is
+required and must include all formula steps.
 
 Examples:
   gt patrol report --summary "All clear, no issues" --steps "heartbeat:OK,inbox-check:OK,health-scan:OK"
@@ -39,7 +42,7 @@ Examples:
 
 func init() {
 	patrolReportCmd.Flags().StringVar(&patrolReportSummary, "summary", "", "Brief summary of patrol observations (required)")
-	patrolReportCmd.Flags().StringVar(&patrolReportSteps, "steps", "", "Step audit: comma-separated step:STATUS pairs (e.g., heartbeat:OK,inbox-check:OK)")
+	patrolReportCmd.Flags().StringVar(&patrolReportSteps, "steps", "", "Step audit: comma-separated step:STATUS pairs (e.g., heartbeat:OK,inbox-check:OK). Required for Deacon.")
 	_ = patrolReportCmd.MarkFlagRequired("summary")
 }
 
@@ -79,6 +82,15 @@ func runPatrolReport(cmd *cobra.Command, args []string) error {
 		}
 	default:
 		return fmt.Errorf("unsupported role for patrol report: %q", roleName)
+	}
+
+	// Deacon patrol must provide complete step audit coverage.
+	// Without this, report-only loops can claim patrol progress without
+	// executing formula steps.
+	if roleInfo.Role == RoleDeacon {
+		if err := validatePatrolStepAudit(cfg.PatrolMolName, patrolReportSteps); err != nil {
+			return err
+		}
 	}
 
 	// Find the active patrol
@@ -126,11 +138,22 @@ func runPatrolReport(cmd *cobra.Command, args []string) error {
 	newPatrolID, err := autoSpawnPatrol(cfg)
 	if err != nil {
 		if newPatrolID != "" {
+			if roleInfo.Role == RoleDeacon {
+				if budgetErr := deacon.GrantPatrolHeartbeatCredits(roleInfo.TownRoot, deacon.PatrolHeartbeatCreditsPerCycle, "patrol-report"); budgetErr != nil {
+					return fmt.Errorf("updating deacon heartbeat budget: %w", budgetErr)
+				}
+			}
 			fmt.Fprintf(os.Stderr, "warning: %s\n", err.Error())
 			fmt.Printf("New patrol: %s\n", newPatrolID)
 			return nil
 		}
 		return fmt.Errorf("starting next patrol cycle: %w", err)
+	}
+
+	if roleInfo.Role == RoleDeacon {
+		if err := deacon.GrantPatrolHeartbeatCredits(roleInfo.TownRoot, deacon.PatrolHeartbeatCreditsPerCycle, "patrol-report"); err != nil {
+			return fmt.Errorf("updating deacon heartbeat budget: %w", err)
+		}
 	}
 
 	fmt.Printf("%s Started new patrol: %s\n", style.Success.Render("✓"), newPatrolID)
@@ -207,4 +230,75 @@ func parseStepResults(stepsFlag string) map[string]string {
 		}
 	}
 	return results
+}
+
+// validatePatrolStepAudit validates that a patrol report includes complete and
+// canonical step coverage for the referenced formula.
+func validatePatrolStepAudit(formulaName, stepsFlag string) error {
+	stepsFlag = strings.TrimSpace(stepsFlag)
+	if stepsFlag == "" {
+		return fmt.Errorf("--steps is required for %s patrol reports and must include all formula steps", formulaName)
+	}
+
+	content, err := formula.GetEmbeddedFormulaContent(formulaName)
+	if err != nil {
+		return fmt.Errorf("loading formula %s: %w", formulaName, err)
+	}
+
+	f, err := formula.Parse(content)
+	if err != nil {
+		return fmt.Errorf("parsing formula %s: %w", formulaName, err)
+	}
+
+	allStepIDs := f.GetAllIDs()
+	if len(allStepIDs) == 0 {
+		return fmt.Errorf("formula %s has no steps", formulaName)
+	}
+
+	reported := parseStepResults(stepsFlag)
+	if len(reported) == 0 {
+		return fmt.Errorf("--steps for %s is empty after parsing; expected comma-separated step:STATUS entries", formulaName)
+	}
+
+	expected := make(map[string]struct{}, len(allStepIDs))
+	for _, stepID := range allStepIDs {
+		expected[stepID] = struct{}{}
+	}
+
+	var unknown []string
+	var invalidStatus []string
+	for stepID, status := range reported {
+		if _, ok := expected[stepID]; !ok {
+			unknown = append(unknown, stepID)
+		}
+		if status != "OK" && status != "SKIP" {
+			invalidStatus = append(invalidStatus, fmt.Sprintf("%s:%s", stepID, status))
+		}
+	}
+
+	var missing []string
+	for _, stepID := range allStepIDs {
+		if _, ok := reported[stepID]; !ok {
+			missing = append(missing, stepID)
+		}
+	}
+
+	if len(unknown) > 0 || len(invalidStatus) > 0 || len(missing) > 0 {
+		sort.Strings(unknown)
+		sort.Strings(invalidStatus)
+		sort.Strings(missing)
+		parts := make([]string, 0, 3)
+		if len(missing) > 0 {
+			parts = append(parts, fmt.Sprintf("missing=%s", strings.Join(missing, ",")))
+		}
+		if len(unknown) > 0 {
+			parts = append(parts, fmt.Sprintf("unknown=%s", strings.Join(unknown, ",")))
+		}
+		if len(invalidStatus) > 0 {
+			parts = append(parts, fmt.Sprintf("invalid_status=%s (allowed: OK,SKIP)", strings.Join(invalidStatus, ",")))
+		}
+		return fmt.Errorf("invalid --steps for %s: %s", formulaName, strings.Join(parts, " "))
+	}
+
+	return nil
 }

@@ -37,10 +37,10 @@ you keep alive becomes part of a permanent ledger of demonstrated capability.
 
 ### Formula Compliance IS Your CV Entry
 
-Your patrol formula has 25 steps. Each step exists because it solves a real
+Your patrol formula has 26 steps. Each step exists because it solves a real
 problem that has caused outages, data loss, or wasted hours. **Skipping steps
 is visible in the ledger.** A patrol report that says "Quiet. All healthy."
-after executing 6 of 25 steps is not evidence of operational excellence — it's
+after executing 6 of 26 steps is not evidence of operational excellence — it's
 evidence of shortcutting.
 
 **The anti-pattern**: Running heartbeat → inbox → rig status → dog status →
@@ -56,7 +56,7 @@ is DISABLED) can be noted and skipped. Every other step runs.
 **Your patrol report** must include a step audit showing which steps executed:
 ```
 Steps: heartbeat OK | inbox OK | orphan-cleanup OK | test-pollution OK |
-gate-eval OK | dispatch-gated SKIP(none) | convoy-check OK | ... (22/25)
+gate-eval OK | dispatch-gated SKIP(none) | convoy-check OK | ... (22/26)
 ```
 
 This is not busywork — it's the difference between a patrol cycle that proves
@@ -237,7 +237,8 @@ Print a summary banner, then report and decide:
 
 ```bash
 # Option A: Loop (low context) → report closes current, starts next cycle
-{{ cmd }} patrol report --summary "Checked inbox, scanned health, no issues"
+{{ cmd }} patrol report --summary "Checked inbox, scanned health, no issues" \
+  --steps "<ALL 26 step_id:STATUS entries>"
 
 # Option B: Exit (high context) → just exit, daemon will respawn
 ```
@@ -276,16 +277,16 @@ At 4 agents × 15 cycles × 2 mails = 120 useless commits per day. Use nudge ins
 
 ## Inbox Hygiene
 
-**CRITICAL**: Always delete messages after handling them.
+**CRITICAL**: Archive messages after handling them.
 
 ```bash
 gt mail inbox                    # Check inbox
 gt mail read <id>                # Read message
 # ... handle the message ...
-gt mail delete <id>              # ALWAYS delete after handling
+gt mail archive <id>             # ALWAYS archive after handling
 ```
 
-**Handoff messages** (`🤝 HANDOFF:`) — read for situational awareness, then delete immediately.
+**Handoff messages** (`🤝 HANDOFF:`) — read for situational awareness, then archive.
 
 ## Lifecycle Request Handling
 
@@ -315,45 +316,24 @@ When the time has passed, poke the agent: `{{ cmd }} mail send <identity> -s "WA
 - Work assignment (Mayor does that)
 - Merge processing (Refineries do that)
 
-## State Files
+## Context Management
+
+Follow the formula's `context-check` and `loop-or-exit` steps exactly.
+
+- Never batch or synthesize patrol cycles by incrementing counters.
+- Never call `{{ cmd }} patrol report` before completing the cycle's formula steps.
+- If context is high, hand off and exit; do not force another synthetic loop.
+
+### State Files
 
 | File | Purpose |
 |------|---------|
 | `{{ .TownRoot }}/deacon/heartbeat.json` | Freshness signal for daemon |
-| `{{ .TownRoot }}/deacon/state.json` | Patrol tracking and scan results |
-
-**state.json format:**
-```json
-{
-  "patrol_count": 0,
-  "last_patrol": "2025-12-23T13:30:00Z",
-  "extraordinary_action": false
-}
-```
-
-## Context Management
-
-**Heuristic**: Hand off after **20 patrol loops** without major incident, OR
-**immediately** after any extraordinary action.
-
-**Extraordinary actions** (trigger immediate handoff):
-- Processing a LIFECYCLE request
-- Remediating a down agent
-- Handling an escalation
-- Any action that consumes significant context
-
-**At loop-or-exit step:**
-1. Read `state.json` for `patrol_count` and `extraordinary_action`
-2. If `extraordinary_action == true` → hand off immediately
-3. If `patrol_count >= 20` → hand off
-4. Otherwise → increment `patrol_count`, save state, run `{{ cmd }} patrol report`
-
-**Handoff command:** `{{ cmd }} handoff -s "Routine cycle" -m "Completed N patrols, no incidents"`
 
 ## Escalation
 
 If you can't fix an issue after 3 attempts:
-1. Log it in state.json
+1. Log it in patrol summary / handoff notes
 2. Send mail to human: `{{ cmd }} mail send --human -s "ESCALATION: ..." -m "..."`
 3. Continue monitoring other agents
 
