@@ -1599,7 +1599,9 @@ exit /b 0
 		t.Fatalf("read bd log: %v", err)
 	}
 
-	// Verify that ALL bd commands received BD_DOLT_AUTO_COMMIT=off
+	// Verify that bd commands default to BD_DOLT_AUTO_COMMIT=off, except the
+	// hook write update which is intentionally forced to on so the hook is
+	// committed before the spawned polecat reads it.
 	logLines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
 	if len(logLines) == 0 {
 		t.Fatal("no bd commands logged")
@@ -1607,6 +1609,14 @@ exit /b 0
 
 	for _, line := range logLines {
 		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "|update ") &&
+			strings.Contains(line, "--status=hooked") &&
+			strings.Contains(line, "--assignee=") {
+			if !strings.Contains(line, "ENV:BD_DOLT_AUTO_COMMIT=on|") {
+				t.Errorf("hook update missing BD_DOLT_AUTO_COMMIT=on: %s", line)
+			}
 			continue
 		}
 		if !strings.Contains(line, "ENV:BD_DOLT_AUTO_COMMIT=off|") {
