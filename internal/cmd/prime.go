@@ -556,15 +556,9 @@ func findAgentWorkOnce(ctx RoleContext, agentID string) *beads.Issue {
 		if agentBead, err := ab.Show(agentBeadID); err == nil && agentBead != nil && agentBead.HookBead != "" {
 			hookBeadDir := beads.ResolveHookDir(ctx.TownRoot, agentBead.HookBead, ctx.WorkDir)
 			hb := beads.New(hookBeadDir)
-			if hookBead, err := hb.Show(agentBead.HookBead); err == nil && hookBead != nil {
-				if hookBead.Status == beads.StatusHooked || hookBead.Status == "in_progress" {
-					return hookBead
-				}
-				// Slot points to a non-active bead; clear stale hook slot.
-				_ = clearAgentHookBead(agentID, ctx.WorkDir, filepath.Join(ctx.TownRoot, ".beads"))
-			} else if errors.Is(err, beads.ErrNotFound) {
-				// Slot points to a bead that no longer exists; self-heal it.
-				_ = clearAgentHookBead(agentID, ctx.WorkDir, filepath.Join(ctx.TownRoot, ".beads"))
+			if hookBead, err := hb.Show(agentBead.HookBead); err == nil && hookBead != nil &&
+				(hookBead.Status == beads.StatusHooked || hookBead.Status == "in_progress") {
+				return hookBead
 			}
 		}
 	}

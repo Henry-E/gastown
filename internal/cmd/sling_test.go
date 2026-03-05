@@ -441,6 +441,7 @@ exit /b 0
 			RigName:     rigName,
 			PolecatName: "Toast",
 			ClonePath:   filepath.Join(townRoot, "fake-polecat"),
+
 		}, nil
 	}
 
@@ -669,6 +670,7 @@ exit /b 0
 			RigName:     rigName,
 			PolecatName: "Toast",
 			ClonePath:   fakeWorkDir,
+
 		}, nil
 	}
 
@@ -1597,9 +1599,7 @@ exit /b 0
 		t.Fatalf("read bd log: %v", err)
 	}
 
-	// Verify that bd commands default to BD_DOLT_AUTO_COMMIT=off, except the
-	// hook slot write which is intentionally forced to on for durable hook
-	// persistence before session start.
+	// Verify that ALL bd commands received BD_DOLT_AUTO_COMMIT=off
 	logLines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
 	if len(logLines) == 0 {
 		t.Fatal("no bd commands logged")
@@ -1607,12 +1607,6 @@ exit /b 0
 
 	for _, line := range logLines {
 		if line == "" {
-			continue
-		}
-		if strings.Contains(line, "|slot set ") || strings.Contains(line, "|slot clear ") {
-			if !strings.Contains(line, "ENV:BD_DOLT_AUTO_COMMIT=on|") {
-				t.Errorf("hook slot command missing BD_DOLT_AUTO_COMMIT=on: %s", line)
-			}
 			continue
 		}
 		if !strings.Contains(line, "ENV:BD_DOLT_AUTO_COMMIT=off|") {
@@ -2359,7 +2353,6 @@ exit /b 0
 		})
 	}
 }
-
 // TestSlingRejectsDeferredBead verifies that gt sling refuses to sling beads
 // with deferred status or deferral keywords in their description (gt-1326mw).
 // This prevents wasting polecat slots on low-priority deferred work.
