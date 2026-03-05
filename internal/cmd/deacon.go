@@ -813,6 +813,14 @@ func runDeaconHeartbeat(cmd *cobra.Command, args []string) error {
 		return errors.New("Deacon is paused")
 	}
 
+	remainingCredits, err := deacon.ConsumePatrolHeartbeatCredit(townRoot)
+	if err != nil {
+		if errors.Is(err, deacon.ErrPatrolHeartbeatBudgetExhausted) {
+			return fmt.Errorf("heartbeat rejected: no patrol heartbeat credits remaining; run a full patrol cycle and record it with `gt patrol report --steps ...` (or create a new patrol with `gt patrol new`)")
+		}
+		return fmt.Errorf("checking patrol heartbeat budget: %w", err)
+	}
+
 	action := ""
 	if len(args) > 0 {
 		action = strings.Join(args, " ")
@@ -822,12 +830,12 @@ func runDeaconHeartbeat(cmd *cobra.Command, args []string) error {
 		if err := deacon.TouchWithAction(townRoot, action, 0, 0); err != nil {
 			return fmt.Errorf("updating heartbeat: %w", err)
 		}
-		fmt.Printf("%s Heartbeat updated: %s\n", style.Bold.Render("✓"), action)
+		fmt.Printf("%s Heartbeat updated: %s (credits left: %d)\n", style.Bold.Render("✓"), action, remainingCredits)
 	} else {
 		if err := deacon.Touch(townRoot); err != nil {
 			return fmt.Errorf("updating heartbeat: %w", err)
 		}
-		fmt.Printf("%s Heartbeat updated\n", style.Bold.Render("✓"))
+		fmt.Printf("%s Heartbeat updated (credits left: %d)\n", style.Bold.Render("✓"), remainingCredits)
 	}
 
 	return nil

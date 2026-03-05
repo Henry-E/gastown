@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/constants"
+	"github.com/steveyegge/gastown/internal/deacon"
 )
 
 var patrolNewRole string
@@ -85,6 +86,12 @@ func runPatrolNew(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		return err
+	}
+
+	if Role(roleName) == RoleDeacon {
+		if err := deacon.GrantPatrolHeartbeatCredits(roleInfo.TownRoot, deacon.PatrolHeartbeatCreditsPerCycle, "patrol-new"); err != nil {
+			return fmt.Errorf("updating deacon heartbeat budget: %w", err)
+		}
 	}
 
 	fmt.Println(patrolID)
