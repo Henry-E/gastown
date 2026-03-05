@@ -461,41 +461,13 @@ func runHookShow(cmd *cobra.Command, args []string) error {
 	}
 
 	b := beads.New(workDir)
-	// Query for hooked beads assigned to the target
-	hookedBeads, err := b.List(beads.ListOptions{
-		Status:   beads.StatusHooked,
-		Assignee: target,
-		Priority: -1,
-	})
+	townRoot, _ := findTownRoot()
+
+	// Query for hooked/in-progress beads assigned to the target, including
+	// cross-rig fallback via town routes.
+	hookedBeads, err := findAssignedHookedBeads(b, townRoot, target)
 	if err != nil {
 		return fmt.Errorf("listing hooked beads: %w", err)
-	}
-
-	// If nothing found in local beads, also check town beads for hooked convoys.
-	// Convoys (hq-cv-*) are stored in town beads (~/gt/.beads) and any agent
-	// can hook them for convoy-driver mode.
-	if len(hookedBeads) == 0 {
-		townRoot, err := findTownRoot()
-		if err == nil && townRoot != "" {
-			// Check town beads for hooked items
-			townBeadsDir := filepath.Join(townRoot, ".beads")
-			if _, err := os.Stat(townBeadsDir); err == nil {
-				townBeads := beads.New(townBeadsDir)
-				townHooked, err := townBeads.List(beads.ListOptions{
-					Status:   beads.StatusHooked,
-					Assignee: target,
-					Priority: -1,
-				})
-				if err == nil && len(townHooked) > 0 {
-					hookedBeads = townHooked
-				}
-			}
-
-			// If still nothing found and town-level role, scan all rigs
-			if len(hookedBeads) == 0 && isTownLevelRole(target) {
-				hookedBeads = scanAllRigsForHookedBeads(townRoot, target)
-			}
-		}
 	}
 
 	// JSON output

@@ -281,39 +281,8 @@ func detectSessionState(ctx RoleContext) SessionState {
 }
 
 func findAssignedHookForState(b *beads.Beads, townRoot, agentID string) string {
-	// Local rig DB query
-	if hookedBeads, err := b.List(beads.ListOptions{
-		Status:   beads.StatusHooked,
-		Assignee: agentID,
-		Priority: -1,
-	}); err == nil && len(hookedBeads) > 0 {
+	if hookedBeads, err := findAssignedHookedBeads(b, townRoot, agentID); err == nil && len(hookedBeads) > 0 {
 		return hookedBeads[0].ID
-	}
-	if inProgressBeads, err := b.List(beads.ListOptions{
-		Status:   "in_progress",
-		Assignee: agentID,
-		Priority: -1,
-	}); err == nil && len(inProgressBeads) > 0 {
-		return inProgressBeads[0].ID
-	}
-
-	// Town-level fallback for rig agents (HQ beads can live in townRoot/.beads).
-	if !isTownLevelRole(agentID) && townRoot != "" {
-		townB := beads.New(filepath.Join(townRoot, ".beads"))
-		if townHooked, err := townB.List(beads.ListOptions{
-			Status:   beads.StatusHooked,
-			Assignee: agentID,
-			Priority: -1,
-		}); err == nil && len(townHooked) > 0 {
-			return townHooked[0].ID
-		}
-		if townIP, err := townB.List(beads.ListOptions{
-			Status:   "in_progress",
-			Assignee: agentID,
-			Priority: -1,
-		}); err == nil && len(townIP) > 0 {
-			return townIP[0].ID
-		}
 	}
 
 	return ""
