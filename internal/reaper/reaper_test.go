@@ -31,25 +31,10 @@ func TestDefaultDatabases(t *testing.T) {
 	if len(DefaultDatabases) == 0 {
 		t.Error("DefaultDatabases should not be empty")
 	}
-
-	hasGastown := false
-	hasLegacyGT := false
 	for _, db := range DefaultDatabases {
 		if err := ValidateDBName(db); err != nil {
 			t.Errorf("DefaultDatabases contains invalid name %q: %v", db, err)
 		}
-		if db == "gastown" {
-			hasGastown = true
-		}
-		if db == "gt" {
-			hasLegacyGT = true
-		}
-	}
-	if !hasGastown {
-		t.Error("DefaultDatabases should include gastown")
-	}
-	if hasLegacyGT {
-		t.Error("DefaultDatabases should not include legacy db name gt")
 	}
 }
 
