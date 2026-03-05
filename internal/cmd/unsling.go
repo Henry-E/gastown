@@ -117,9 +117,8 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 
 	b := beads.New(beadsPath)
 
-	// Find hooked bead by querying status+assignee directly (hq-l6mm5).
-	// The work bead itself is the authoritative source — no need to read
-	// the agent bead's hook_bead slot.
+	// Find hooked bead by querying status+assignee directly.
+	// This avoids relying on potentially stale hook slot metadata.
 	hookedBeadID := ""
 	hookedBeads, listErr := b.List(beads.ListOptions{
 		Status:   beads.StatusHooked,
@@ -159,6 +158,17 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 	}
 
 	if hookedBeadID == "" {
+		// Self-heal stale slot state: even when no hooked bead is visible,
+		// the agent wisp's hook slot may still point at old/closed work.
+		if dryRun {
+			fmt.Printf("Would clear hook slot on agent bead %s\n", agentBeadID)
+		} else {
+			if err := clearAgentHookSlot(agentBeadID, beadsPath); err != nil {
+				// Non-fatal: slot may already be empty or unsupported for legacy beads.
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: couldn't clear hook slot on %s: %v\n", agentBeadID, err)
+			}
+		}
+
 		// hook_bead is empty, but there may be stale beads with status "hooked"
 		// still assigned to this agent (e.g., hook_bead was cleared but bead status
 		// wasn't updated). Clean them up so gt hook and gt unsling stay consistent.
@@ -210,11 +220,16 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 	}
 
 	if dryRun {
+		fmt.Printf("Would clear hook slot on agent bead %s\n", agentBeadID)
 		fmt.Printf("Would unsling hooked bead from %s\n", agentID)
 		return nil
 	}
 
-	// No ClearHookBead call needed — agent bead hook slot is no longer maintained (hq-l6mm5).
+	// Clear the hook slot first so hook-based resolution reflects the unsling.
+	if err := clearAgentHookSlot(agentBeadID, beadsPath); err != nil {
+		// Non-fatal: slot may already be empty or unsupported for legacy beads.
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: couldn't clear hook slot on %s: %v\n", agentBeadID, err)
+	}
 
 	// Update hooked bead status from "hooked" back to "open".
 	// Previously, only the agent's hook slot was cleared but the bead itself stayed
@@ -367,4 +382,15 @@ func isAgentTarget(s string) bool {
 	}
 
 	return false
+}
+
+func clearAgentHookSlot(agentBeadID, beadsPath string) error {
+	out, err := BdCmd("slot", "clear", agentBeadID, "hook").
+		Dir(beadsPath).
+		StripBeadsDir().
+		CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

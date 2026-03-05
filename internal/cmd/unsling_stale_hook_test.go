@@ -116,6 +116,12 @@ esac
 		t.Fatalf("write bd stub: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GT_ROLE", "")
+	t.Setenv("GT_RIG", "")
+	t.Setenv("GT_POLECAT", "")
+	t.Setenv("GT_CREW", "")
+	t.Setenv("GT_ROOT", "")
+	t.Setenv("BEADS_DIR", "")
 
 	oldCwd, err := os.Getwd()
 	if err != nil {
