@@ -612,6 +612,12 @@ func (b *Beads) GetAgentBead(id string) (*Issue, *AgentFields, error) {
 	}
 
 	fields := ParseAgentFields(issue.Description)
+	// Prefer DB columns when available — description text can be stale because
+	// some updates (for example, bd agent state) update columns only.
+	if issue.AgentState != "" || issue.HookBead != "" {
+		fields.AgentState = issue.AgentState
+		fields.HookBead = issue.HookBead
+	}
 	return issue, fields, nil
 }
 
