@@ -17,6 +17,7 @@ import (
 var (
 	witnessForeground    bool
 	witnessStatusJSON    bool
+	witnessCheckJSON     bool
 	witnessAgentOverride string
 	witnessEnvOverrides  []string
 )
@@ -104,6 +105,26 @@ Examples:
 	RunE: runWitnessAttach,
 }
 
+var witnessCheckCmd = &cobra.Command{
+	Use:   "check [rig|prefix]",
+	Short: "Check witness dependencies (refinery, deacon, queue health)",
+	Long: `Check witness dependency health for a rig.
+
+This command provides a compiled health check for witness patrol logic:
+  - Resolves rig prefix -> refinery session name correctly
+  - Reports refinery running state
+  - Reports deacon running state with grace-window metadata
+  - Reports queue health equivalent to "gt refinery ready --all --json"
+
+Examples:
+  gt witness check
+  gt witness check gastown
+  gt witness check gt
+  gt witness check gastown --json`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runWitnessCheck,
+}
+
 var witnessRestartCmd = &cobra.Command{
 	Use:   "restart <rig>",
 	Short: "Restart the witness",
@@ -127,6 +148,7 @@ func init() {
 
 	// Status flags
 	witnessStatusCmd.Flags().BoolVar(&witnessStatusJSON, "json", false, "Output as JSON")
+	witnessCheckCmd.Flags().BoolVar(&witnessCheckJSON, "json", false, "Output as JSON")
 
 	// Restart flags
 	witnessRestartCmd.Flags().StringVar(&witnessAgentOverride, "agent", "", "Agent alias to run the Witness with (overrides town default)")
@@ -138,6 +160,7 @@ func init() {
 	witnessCmd.AddCommand(witnessRestartCmd)
 	witnessCmd.AddCommand(witnessStatusCmd)
 	witnessCmd.AddCommand(witnessAttachCmd)
+	witnessCmd.AddCommand(witnessCheckCmd)
 
 	rootCmd.AddCommand(witnessCmd)
 }
