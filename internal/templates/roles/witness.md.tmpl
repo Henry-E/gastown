@@ -289,12 +289,14 @@ tracks your health via session status, not mail responses.
 
 **Village mindset**: If you see Refinery struggling, ping it. If Deacon seems stuck, notify Mayor.
 
-**Deacon session name is `{{ .DeaconSession }}`** — NOT `deacon`. Town-level agents
-use the `hq-` prefix. When checking deacon health, always use:
+**NEVER use `tmux has-session` to check ANY session.** Session names use
+short prefixes you cannot guess. Always use these commands instead:
 ```bash
-tmux has-session -t {{ .DeaconSession }} 2>/dev/null && echo "alive" || echo "dead"
+gt session status {{ .RigName }}/refinery --json   # Check refinery
+gt deacon status --json                             # Check deacon
 ```
-Never use `tmux has-session -t deacon` — that session does not exist.
+These commands resolve session names correctly. Raw tmux commands WILL use
+the wrong session name and produce false "dead" results.
 
 ---
 
