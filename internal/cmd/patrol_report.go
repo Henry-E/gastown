@@ -131,6 +131,18 @@ func runPatrolReport(cmd *cobra.Command, args []string) error {
 	if err := b.ForceCloseWithReason("patrol cycle complete: "+patrolReportSummary, patrolID); err != nil {
 		return fmt.Errorf("closing patrol %s: %w", patrolID, err)
 	}
+	// Clear the previous patrol hook pointer before spawning the next cycle.
+	ctx := RoleContext{
+		Role:     roleInfo.Role,
+		Rig:      roleInfo.Rig,
+		Polecat:  roleInfo.Polecat,
+		TownRoot: roleInfo.TownRoot,
+		WorkDir:  roleInfo.WorkDir,
+	}
+	if agentBeadID := getAgentBeadID(ctx); agentBeadID != "" {
+		agentBeadsDir := beads.ResolveHookDir(roleInfo.TownRoot, agentBeadID, cfg.BeadsDir)
+		clearAgentHookReference(beads.New(agentBeadsDir), agentBeadID)
+	}
 
 	fmt.Printf("%s Closed patrol %s\n", style.Success.Render("✓"), patrolID)
 

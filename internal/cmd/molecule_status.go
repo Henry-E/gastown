@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -400,7 +401,10 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 				}
 				hookBead, err = hookB.Show(agentBead.HookBead)
 				if err != nil {
-					// Hook bead referenced but not found - report error but continue
+					// Hook bead referenced but not found - clear stale pointer and continue.
+					if errors.Is(err, beads.ErrNotFound) {
+						clearAgentHookReference(agentB, agentBeadID)
+					}
 					hookBead = nil
 				}
 			}

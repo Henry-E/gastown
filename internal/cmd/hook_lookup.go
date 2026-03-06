@@ -67,3 +67,27 @@ func findAssignedHookedBeads(local *beads.Beads, townRoot, assignee string) ([]*
 
 	return nil, nil
 }
+
+// setAgentHookReference updates agent hook metadata best-effort.
+// This updates both the description-backed field and the hook_bead slot.
+func setAgentHookReference(agentB *beads.Beads, agentBeadID, hookBeadID string) {
+	if agentB == nil || agentBeadID == "" {
+		return
+	}
+
+	_ = agentB.UpdateAgentDescriptionFields(agentBeadID, beads.AgentFieldUpdates{
+		HookBead: &hookBeadID,
+	})
+
+	if hookBeadID == "" {
+		_, _ = agentB.Run("slot", "clear", agentBeadID, "hook_bead")
+		return
+	}
+
+	_, _ = agentB.Run("slot", "set", agentBeadID, "hook_bead", hookBeadID)
+}
+
+// clearAgentHookReference clears stale hook metadata from an agent bead.
+func clearAgentHookReference(agentB *beads.Beads, agentBeadID string) {
+	setAgentHookReference(agentB, agentBeadID, "")
+}

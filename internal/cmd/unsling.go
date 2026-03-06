@@ -159,6 +159,10 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 	}
 
 	if hookedBeadID == "" {
+		// No active hooked bead found by assignee query. Clear stale hook metadata
+		// so future gt prime/gt hook reads don't keep pointing at reaped wisps.
+		clearAgentHookReference(b, agentBeadID)
+
 		// hook_bead is empty, but there may be stale beads with status "hooked"
 		// still assigned to this agent (e.g., hook_bead was cleared but bead status
 		// wasn't updated). Clean them up so gt hook and gt unsling stay consistent.
@@ -214,7 +218,8 @@ func runUnslingWith(cmd *cobra.Command, args []string, dryRun, force bool) error
 		return nil
 	}
 
-	// No ClearHookBead call needed — agent bead hook slot is no longer maintained (hq-l6mm5).
+	// Clear stale hook metadata on the agent bead.
+	clearAgentHookReference(b, agentBeadID)
 
 	// Update hooked bead status from "hooked" back to "open".
 	// Previously, only the agent's hook slot was cleared but the bead itself stayed

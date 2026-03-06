@@ -556,9 +556,14 @@ func findAgentWorkOnce(ctx RoleContext, agentID string) *beads.Issue {
 		if agentBead, err := ab.Show(agentBeadID); err == nil && agentBead != nil && agentBead.HookBead != "" {
 			hookBeadDir := beads.ResolveHookDir(ctx.TownRoot, agentBead.HookBead, ctx.WorkDir)
 			hb := beads.New(hookBeadDir)
-			if hookBead, err := hb.Show(agentBead.HookBead); err == nil && hookBead != nil &&
+			hookBead, showErr := hb.Show(agentBead.HookBead)
+			if showErr == nil && hookBead != nil &&
 				(hookBead.Status == beads.StatusHooked || hookBead.Status == "in_progress") {
 				return hookBead
+			}
+			if errors.Is(showErr, beads.ErrNotFound) {
+				// Self-heal stale hook pointers to reaped wisps/beads.
+				clearAgentHookReference(ab, agentBeadID)
 			}
 		}
 	}

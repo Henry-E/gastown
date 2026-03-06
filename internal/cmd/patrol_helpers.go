@@ -9,6 +9,7 @@ import (
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/workspace"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -301,6 +302,16 @@ func autoSpawnPatrol(cfg PatrolConfig) (string, error) {
 		Dir(cfg.BeadsDir).
 		Run(); err != nil {
 		return patrolID, fmt.Errorf("created wisp %s but failed to hook", patrolID)
+	}
+
+	// Keep agent hook metadata in sync for patrol agents (witness/deacon/refinery).
+	// Without this, stale hook_bead pointers can survive until reaped and break
+	// readers that check hook_bead first.
+	if townRoot, err := workspace.Find(cfg.BeadsDir); err == nil && townRoot != "" {
+		if agentBeadID := agentIDToBeadID(cfg.Assignee, townRoot); agentBeadID != "" {
+			agentBeadsDir := beads.ResolveHookDir(townRoot, agentBeadID, cfg.BeadsDir)
+			setAgentHookReference(beads.New(agentBeadsDir), agentBeadID, patrolID)
+		}
 	}
 
 	return patrolID, nil
