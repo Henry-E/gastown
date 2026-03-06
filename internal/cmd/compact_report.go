@@ -20,6 +20,8 @@ var (
 	compactReportVerbose bool
 	compactReportDate    string
 	compactReportJSON    bool
+	// Override in tests to inspect outbound mail command construction.
+	compactReportMailCommand = exec.Command
 )
 
 // wispCategory maps individual wisp types to display categories.
@@ -66,7 +68,7 @@ type weeklyRollup struct {
 var compactReportCmd = &cobra.Command{
 	Use:   "report",
 	Short: "Generate and send compaction digest report",
-	Long: `Generate a compaction digest and send it to deacon/ (cc mayor/).
+	Long: `Generate a compaction digest and send it to mayor/.
 
 The daily digest shows per-category breakdown of deleted, promoted, and active
 wisps, plus any promotions with reasons and detected anomalies.
@@ -171,7 +173,7 @@ func runDailyDigest() error {
 		fmt.Fprintf(os.Stderr, "warning: failed to create report bead: %v\n", err)
 	}
 
-	// Send mail to deacon/, cc mayor/
+	// Send mail to mayor/
 	if err := sendCompactDigest(dateStr, markdown); err != nil {
 		return fmt.Errorf("sending digest: %w", err)
 	}
@@ -313,7 +315,7 @@ func sendCompactDigest(dateStr, body string) error {
 
 	// Send to mayor/ only — deacon/ is not a valid mail address (audit bead
 	// serves as the deacon-side record).
-	mailCmd := exec.Command("gt", "mail", "send", "mayor/",
+	mailCmd := compactReportMailCommand("gt", "mail", "send", "mayor/",
 		"-s", subject,
 		"-m", body,
 	)
@@ -429,7 +431,7 @@ func runWeeklyRollup() error {
 
 	// Send to mayor/
 	subject := fmt.Sprintf("Weekly Wisp Compaction: %s to %s", weekStart, weekEnd)
-	mailCmd := exec.Command("gt", "mail", "send", "mayor/",
+	mailCmd := compactReportMailCommand("gt", "mail", "send", "mayor/",
 		"-s", subject,
 		"-m", markdown,
 	)

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -276,5 +277,39 @@ func TestFormatWeeklyRollup(t *testing.T) {
 	}
 	if !strings.Contains(md, "### Anomalies This Week") {
 		t.Error("missing anomalies section")
+	}
+}
+
+func TestSendCompactDigestSendsToMayorOnly(t *testing.T) {
+	orig := compactReportMailCommand
+	defer func() {
+		compactReportMailCommand = orig
+	}()
+
+	var gotName string
+	var gotArgs []string
+	compactReportMailCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return exec.Command("true")
+	}
+
+	if err := sendCompactDigest("2026-02-09", "digest body"); err != nil {
+		t.Fatalf("sendCompactDigest() error = %v", err)
+	}
+
+	if gotName != "gt" {
+		t.Fatalf("command name = %q, want %q", gotName, "gt")
+	}
+	if len(gotArgs) < 3 {
+		t.Fatalf("command args too short: %v", gotArgs)
+	}
+	if gotArgs[0] != "mail" || gotArgs[1] != "send" || gotArgs[2] != "mayor/" {
+		t.Fatalf("mail target args = %v, want [mail send mayor/ ...]", gotArgs)
+	}
+	for _, arg := range gotArgs {
+		if strings.Contains(arg, "deacon/") {
+			t.Fatalf("unexpected deacon recipient in args: %v", gotArgs)
+		}
 	}
 }
