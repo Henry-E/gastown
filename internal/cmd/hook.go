@@ -253,7 +253,6 @@ func runHook(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("finding town root: %w", err)
 	}
-	townBeadsDir := filepath.Join(townRoot, ".beads")
 
 	// Resolve the beads directory for the target agent.
 	// For remote targets, resolve from the agent bead's prefix to find the
@@ -394,9 +393,6 @@ func runHook(_ *cobra.Command, args []string) error {
 		fmt.Printf("%s Work attached to hook (hooked bead)\n", style.Bold.Render("✓"))
 	}
 
-	// Update agent bead's hook_bead field (matches gt sling behavior)
-	// This ensures gt hook / gt mol status can find hooked work via the agent bead
-	updateAgentHookBead(agentID, beadID, workDir, townBeadsDir)
 
 	if targetAgent != "" {
 		fmt.Printf("  Use 'gt hook show %s' to verify\n", targetAgent)

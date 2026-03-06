@@ -541,15 +541,6 @@ func agentIDToBeadID(agentID, townRoot string) string {
 	}
 }
 
-// updateAgentHookBead is a no-op. Previously set the hook_bead slot on agent beads
-// when work was slung, but this was redundant: the work bead itself tracks
-// status=hooked and assignee=<agent>. Agent bead slot writes caused warnings
-// in cross-database scenarios and added unnecessary Dolt load.
-// Removed per hq-l6mm5: replace bd slot hooks with direct bead tracking.
-func updateAgentHookBead(agentID, beadID, workDir, townBeadsDir string) {
-	// No-op: work bead status=hooked + assignee is the authoritative source.
-	// Agent bead hook_bead slot is no longer maintained.
-}
 
 // wakeRigAgents wakes the witness for a rig after polecat dispatch.
 // This ensures the witness is ready to monitor. The refinery is nudged

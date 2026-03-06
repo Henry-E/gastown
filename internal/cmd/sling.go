@@ -661,8 +661,7 @@ func runSling(cmd *cobra.Command, args []string) (retErr error) {
 	targetAgent := resolved.Agent
 	targetPane := resolved.Pane
 	hookWorkDir := resolved.WorkDir
-	hookSetAtomically := resolved.HookSetAtomically
-	delayedDogInfo := resolved.DelayedDogInfo
+delayedDogInfo := resolved.DelayedDogInfo
 	newPolecatInfo := resolved.NewPolecatInfo
 	isSelfSling := resolved.IsSelfSling
 
@@ -892,13 +891,6 @@ func runSling(cmd *cobra.Command, args []string) (retErr error) {
 	actor := detectActor()
 	_ = events.LogFeed(events.TypeSling, actor, events.SlingPayload(beadID, targetAgent))
 
-	// Update agent bead's hook_bead field (ZFC: agents track their current work)
-	// Skip if hook was already set atomically during polecat spawn - avoids "agent bead not found"
-	// error when polecat redirect setup fails (GH #gt-mzyk5: agent bead created in rig beads
-	// but updateAgentHookBead looks in polecat's local beads if redirect is missing).
-	if !hookSetAtomically {
-		updateAgentHookBead(targetAgent, beadID, hookWorkDir, townBeadsDir)
-	}
 
 	// Store all attachment fields in a single read-modify-write cycle.
 	// This eliminates the race condition where sequential independent updates

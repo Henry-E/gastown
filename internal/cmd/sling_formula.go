@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
+"strings"
 
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/cli"
@@ -83,7 +82,6 @@ func runSlingFormula(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("finding town root: %w", err)
 	}
-	townBeadsDir := filepath.Join(townRoot, ".beads")
 
 	// Resolve target using shared dispatch logic
 	var target string
@@ -190,9 +188,6 @@ func runSlingFormula(ctx context.Context, args []string) error {
 	payload["formula"] = formulaName
 	_ = events.LogFeed(events.TypeSling, actor, payload)
 
-	// Update agent bead's hook_bead field (ZFC: agents track their current work)
-	// Note: formula slinging uses town root as workDir (no polecat-specific path)
-	updateAgentHookBead(targetAgent, wispRootID, "", townBeadsDir)
 
 	// Store all attachment fields in a single read-modify-write cycle.
 	// NOTE: For standalone formula sling, the wisp IS the work - do NOT store
