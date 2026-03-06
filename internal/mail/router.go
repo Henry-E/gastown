@@ -1102,6 +1102,9 @@ func (r *Router) sendToSingle(msg *Message) error {
 		"--assignee", toIdentity,
 		"-d", msg.Body,
 	}
+	if beads.NeedsForceForID(msg.ID) {
+		args = append(args, "--force")
+	}
 
 	// Add priority flag
 	beadsPriority := PriorityToBeads(msg.Priority)
