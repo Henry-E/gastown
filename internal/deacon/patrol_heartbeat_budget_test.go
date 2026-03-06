@@ -13,17 +13,27 @@ func TestConsumePatrolHeartbeatCredit_BootstrapOnce(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
+	// First consume seeds bootstrap credits and decrements by one
 	remaining, err := ConsumePatrolHeartbeatCredit(tmpDir)
 	if err != nil {
 		t.Fatalf("first consume returned error: %v", err)
 	}
-	if remaining != 0 {
-		t.Fatalf("first consume remaining = %d, want 0", remaining)
+	if remaining != bootstrapPatrolHeartbeatCredits-1 {
+		t.Fatalf("first consume remaining = %d, want %d", remaining, bootstrapPatrolHeartbeatCredits-1)
 	}
 
+	// Consume all remaining bootstrap credits
+	for i := 0; i < bootstrapPatrolHeartbeatCredits-1; i++ {
+		_, err = ConsumePatrolHeartbeatCredit(tmpDir)
+		if err != nil {
+			t.Fatalf("consume %d returned unexpected error: %v", i+2, err)
+		}
+	}
+
+	// Next consume should fail — budget exhausted
 	_, err = ConsumePatrolHeartbeatCredit(tmpDir)
 	if !errors.Is(err, ErrPatrolHeartbeatBudgetExhausted) {
-		t.Fatalf("second consume error = %v, want ErrPatrolHeartbeatBudgetExhausted", err)
+		t.Fatalf("consume after exhaustion error = %v, want ErrPatrolHeartbeatBudgetExhausted", err)
 	}
 }
 
