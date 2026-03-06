@@ -1232,29 +1232,73 @@ func Start(townRoot string) error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to save state: %v\n", err)
 	}
 
-	// Wait for the server to be accepting connections, not just alive.
-	// IsRunning only checks PID — we need CheckServerReachable to confirm
-	// the port is listening. Retry with backoff since startup takes time.
-	var lastErr error
-	for attempt := 0; attempt < 10; attempt++ {
-		time.Sleep(500 * time.Millisecond)
+	// Wait for the server to be accepting connections, not just process-alive.
+	// Keep the PID file sticky during startup checks so partial DB-load failures
+	// (or slower initialization) can't strand a healthy listener without dolt.pid.
+	if err := waitForServerReady(townRoot, cmd.Process, config.PidFile, cmd.Process.Pid, 10, 500*time.Millisecond, CheckServerReachable); err != nil {
+		return err
+	}
 
-		running, _, err = IsRunning(townRoot)
-		if err != nil {
-			return fmt.Errorf("verifying server started: %w", err)
-		}
-		if !running {
+	return nil
+}
+
+// waitForServerReady polls until checkReachable succeeds while the process stays
+// alive. It also refreshes the PID file during startup to guard against other
+// probes cleaning it up before the server finishes binding its port.
+func waitForServerReady(
+	townRoot string,
+	process *os.Process,
+	pidFile string,
+	pid int,
+	maxAttempts int,
+	retryDelay time.Duration,
+	checkReachable func(string) error,
+) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	if retryDelay <= 0 {
+		retryDelay = 500 * time.Millisecond
+	}
+	if checkReachable == nil {
+		checkReachable = CheckServerReachable
+	}
+	if process == nil || pid <= 0 {
+		return fmt.Errorf("invalid Dolt process state during startup")
+	}
+
+	pidStr := strconv.Itoa(pid)
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		time.Sleep(retryDelay)
+
+		// If the process exited, startup failed regardless of readiness checks.
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			_ = os.Remove(pidFile)
 			return fmt.Errorf("Dolt server failed to start (check logs with 'gt dolt logs')")
 		}
 
-		if err := CheckServerReachable(townRoot); err == nil {
-			return nil // Server is up and accepting connections
+		// Keep PID tracking intact while the server is still initializing.
+		pidValid := false
+		if data, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(data)) == pidStr {
+			pidValid = true
+		}
+		if !pidValid {
+			if err := os.WriteFile(pidFile, []byte(pidStr), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to refresh Dolt PID file during startup: %v\n", err)
+			}
+		}
+
+		if err := checkReachable(townRoot); err == nil {
+			return nil
 		} else {
 			lastErr = err
 		}
 	}
 
-	return fmt.Errorf("Dolt server process started (PID %d) but not accepting connections after 5s: %w\nCheck logs with: gt dolt logs", cmd.Process.Pid, lastErr)
+	waited := retryDelay * time.Duration(maxAttempts)
+	return fmt.Errorf("Dolt server process started (PID %d) but not accepting connections after %v: %w\nCheck logs with: gt dolt logs", pid, waited, lastErr)
 }
 
 // cleanupStaleDoltLock removes a stale Dolt LOCK file if no process holds it.
