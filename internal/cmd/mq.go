@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,12 +35,12 @@ var (
 	mqRejectStdin  bool // Read reason from stdin
 
 	// List command flags
-	mqListReady   bool
-	mqListStatus  string
-	mqListWorker  string
-	mqListEpic    string
-	mqListJSON    bool
-	mqListVerify  bool
+	mqListReady  bool
+	mqListStatus string
+	mqListWorker string
+	mqListEpic   string
+	mqListJSON   bool
+	mqListVerify bool
 
 	// Status command flags
 	mqStatusJSON bool
@@ -526,6 +528,26 @@ func runMQPostMerge(_ *cobra.Command, args []string) error {
 		fmt.Printf("  %s Source issue: %s %s\n", style.Dim.Render("○"), result.SourceIssueID, style.Dim.Render("(already closed or not found)"))
 	}
 
+	// Rebuild gt binary when the merged diff touched Go files.
+	// Use HEAD@{1}..HEAD because this command runs immediately after merge.
+	goChanged, goFiles, goErr := mergedGoFilesChanged(r.Path)
+	if goErr != nil {
+		fmt.Printf("  %s Post-merge Go diff check: %v\n", style.Warning.Render("⚠"), goErr)
+	} else if goChanged {
+		fmt.Printf("  %s Go files changed in merge (%d)\n", style.Success.Render("✓"), len(goFiles))
+		for _, file := range goFiles {
+			fmt.Printf("    - %s\n", file)
+		}
+		fmt.Printf("  %s Running make install...\n", style.Dim.Render("→"))
+		if err := runMakeInstall(r.Path); err != nil {
+			fmt.Printf("  %s make install failed: %v\n", style.Warning.Render("⚠"), err)
+		} else {
+			fmt.Printf("  %s make install complete\n", style.Success.Render("✓"))
+		}
+	} else {
+		fmt.Printf("  %s No Go file changes in merge (skipping make install)\n", style.Dim.Render("○"))
+	}
+
 	// Delete remote branch unless skipped
 	if mr.Branch == "" {
 		fmt.Printf("  %s No branch name in MR (skipping branch delete)\n", style.Dim.Render("○"))
@@ -574,4 +596,33 @@ func runMQPostMerge(_ *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func mergedGoFilesChanged(repoPath string) (bool, []string, error) {
+	cmd := exec.Command("git", "diff", "--name-only", "HEAD@{1}..HEAD", "--", "*.go")
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, nil, fmt.Errorf("git diff HEAD@{1}..HEAD: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	files := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		files = append(files, line)
+	}
+	sort.Strings(files)
+	return len(files) > 0, files, nil
+}
+
+func runMakeInstall(repoPath string) error {
+	cmd := exec.Command("make", "install")
+	cmd.Dir = repoPath
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

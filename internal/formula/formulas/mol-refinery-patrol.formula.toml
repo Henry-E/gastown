@@ -248,6 +248,9 @@ Run post-merge cleanup:
 gt mq post-merge <rig> <mr-bead-id>
 ```
 
+`gt mq post-merge` automatically runs `make install` when the merged diff
+(`HEAD@{1}..HEAD`) includes any `*.go` files.
+
 Archive MERGE_READY message and delete temp branch:
 ```bash
 gt mail archive <merge-ready-message-id>
