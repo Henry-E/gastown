@@ -537,6 +537,9 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 		return fmt.Errorf("creating session: %w", err)
 	}
 
+	// Keep the pane available on agent exit so auto-respawn can recover in place.
+	_ = t.SetRemainOnExit(sessionName, true)
+
 	// Set environment (non-fatal: session works without these)
 	// Use centralized AgentEnv for consistency across all role startup paths
 	envVars := config.AgentEnv(config.AgentEnvConfig{
@@ -544,6 +547,7 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 		TownRoot: townRoot,
 		Agent:    agentOverride,
 	})
+	envVars = session.MergeRuntimeLivenessEnv(envVars, runtimeConfig)
 	for k, v := range envVars {
 		_ = t.SetEnvironment(sessionName, k, v)
 	}
@@ -561,6 +565,12 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 	// Wait for Claude to start
 	if err := t.WaitForCommand(sessionName, constants.SupportedShells, constants.ClaudeStartTimeout); err != nil {
 		return fmt.Errorf("waiting for deacon to start: %w", err)
+	}
+
+	// Match daemon startup behavior: auto-respawn the Deacon when pane dies.
+	if err := t.SetAutoRespawnHook(sessionName); err != nil {
+		// Non-fatal: daemon heartbeat still restarts Deacon as fallback.
+		style.PrintWarning("failed to set auto-respawn hook for deacon: %v", err)
 	}
 
 	// Accept startup dialogs (workspace trust + bypass permissions) if they appear.

@@ -554,6 +554,37 @@ gt deacon health-check <agent>   # Send health check ping, track response
 gt deacon health-state           # Show health check state for all agents
 ```
 
+### Deacon Crash-Loop Recovery (Context Limit)
+
+Use this when `hq-deacon` repeatedly dies during patrol (often with
+`mol-deacon-patrol` + low-context models).
+
+```bash
+# 1) Baseline (recent restart/escalation rate)
+rg '"type":"session_start","actor":"deacon"' ~/gt/.events.jsonl | tail -n 20
+rg '"type":"escalation_sent".*deacon' ~/gt/.events.jsonl | tail -n 20
+
+# 2) Fast stabilization path: run Deacon on stronger model
+gt deacon restart --agent claude
+
+# 3) Verify for >= 2 heartbeat windows (daemon heartbeat is 3m)
+#    Watch for >= 6 minutes:
+gt deacon status
+tail -n 200 ~/gt/.events.jsonl | rg '"type":"session_start","actor":"deacon"|escalation_sent'
+```
+
+Success criteria:
+- No new Deacon `session_start` churn during the observation window
+- No new Deacon-related `escalation_sent` events
+- `gt deacon status` remains `Health: fresh`
+
+Rollback:
+
+```bash
+# Return to previous cost profile
+gt deacon restart --agent claude-haiku
+```
+
 ### Merge Queue (MQ)
 
 ```bash
