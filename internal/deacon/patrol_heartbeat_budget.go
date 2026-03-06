@@ -13,11 +13,13 @@ const (
 	// PatrolHeartbeatCreditsPerCycle is the number of heartbeats a Deacon patrol
 	// cycle is allowed to emit before proving progress via patrol lifecycle
 	// commands again.
-	PatrolHeartbeatCreditsPerCycle = 2
+	PatrolHeartbeatCreditsPerCycle = 5
 
-	// bootstrapPatrolHeartbeatCredits allows first-run startup to emit one
-	// heartbeat before the first patrol wisp is created.
-	bootstrapPatrolHeartbeatCredits = 1
+	// bootstrapPatrolHeartbeatCredits allows first-run startup to emit
+	// heartbeats before the first patrol wisp is created. The deacon patrol
+	// formula is large (~1171 lines) and the haiku agent needs multiple
+	// heartbeats during initial startup and first patrol cycle completion.
+	bootstrapPatrolHeartbeatCredits = 5
 )
 
 // ErrPatrolHeartbeatBudgetExhausted is returned when a heartbeat is attempted
