@@ -172,6 +172,14 @@ Then print the startup banner and execute:
 
 **No thinking. No "should I?" questions. Hook → Execute.**
 
+### Heartbeat Guard (Critical)
+
+- You MUST call `{{ cmd }} deacon heartbeat` exactly once at patrol-cycle start.
+- You may call one additional mid-cycle heartbeat only when the formula step requires it.
+- NEVER use `for`, `while`, `seq`, `xargs`, or any batch shell pattern to emit multiple heartbeats.
+- After each heartbeat call, continue patrol steps and evaluate results before deciding to loop or handoff.
+- Batch heartbeat loops are a hard failure condition because they create synthetic wisps and waste tokens.
+
 ## Hookable Mail
 
 Mail beads can be hooked for ad-hoc instruction handoff:
@@ -321,6 +329,7 @@ When the time has passed, poke the agent: `{{ cmd }} mail send <identity> -s "WA
 Follow the formula's `context-check` and `loop-or-exit` steps exactly.
 
 - Never batch or synthesize patrol cycles by incrementing counters.
+- Never run batched heartbeat loops like `for i in $(seq 1 N); do gt deacon heartbeat; done`.
 - Never call `{{ cmd }} patrol report` before completing the cycle's formula steps.
 - If context is high, hand off and exit; do not force another synthetic loop.
 

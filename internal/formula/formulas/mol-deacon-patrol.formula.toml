@@ -6,6 +6,7 @@ Keep patrol mechanical and quiet:
 - Monitor rig health and dispatch recovery work.
 - Avoid noisy mail/nudges in idle periods.
 - Keep compaction reporting silent unless compaction actually changed data.
+- Heartbeat guard: run `gt deacon heartbeat` exactly once per heartbeat step; never batch/loop heartbeat commands.
 
 Read step instructions before acting (`bd show <step-id>`).
 """
@@ -25,7 +26,12 @@ Refresh liveness at cycle start:
 ```bash
 gt deacon heartbeat "starting patrol cycle"
 ```
-Run this first.
+Run this first, exactly once for the cycle.
+
+Hard guard:
+- NEVER use loops or batching for heartbeat commands (`for`, `while`, `seq`, `xargs`, command fan-out).
+- Do not run multiple heartbeat invocations in a single shell command.
+- After this single heartbeat call, continue to the next step and evaluate state before any later heartbeat.
 """
 
 [[steps]]
@@ -160,6 +166,11 @@ Refresh liveness during long cycles:
 ```bash
 gt deacon heartbeat "mid-cycle checkpoint"
 ```
+Run this mid-cycle refresh at most once per patrol cycle.
+
+Hard guard:
+- NEVER run heartbeat via loops/batch commands (`for`, `seq`, `xargs`, multi-call shell chains).
+- Execute once, then continue to `health-scan` and subsequent steps.
 """
 
 [[steps]]
@@ -431,4 +442,8 @@ If context is high, hand off and exit:
 gt handoff -s "Deacon patrol handoff" -m "<observations>"
 ```
 Never leave session idle without reporting or handoff.
+
+Heartbeat loop guard reminder:
+- Start each new patrol cycle with exactly one `gt deacon heartbeat`.
+- Never pre-run future cycles with batched heartbeat loops.
 """
