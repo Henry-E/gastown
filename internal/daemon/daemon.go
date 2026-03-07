@@ -19,7 +19,6 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	beadsdk "github.com/steveyegge/beads"
-	"gopkg.in/natefinch/lumberjack.v2"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/boot"
 	"github.com/steveyegge/gastown/internal/config"
@@ -38,6 +37,7 @@ import (
 	"github.com/steveyegge/gastown/internal/util"
 	"github.com/steveyegge/gastown/internal/wisp"
 	"github.com/steveyegge/gastown/internal/witness"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // Daemon is the town-level background service.
@@ -54,8 +54,8 @@ type Daemon struct {
 	curator       *feed.Curator
 	convoyManager *ConvoyManager
 	beadsStores   map[string]beadsdk.Storage
-	doltServer *DoltServerManager
-	krcPruner  *KRCPruner
+	doltServer    *DoltServerManager
+	krcPruner     *KRCPruner
 
 	// Mass death detection: track recent session deaths
 	deathsMu     sync.Mutex
@@ -755,7 +755,6 @@ func (d *Daemon) pourDoctorMolecule(warnings []string) {
 	d.logger.Printf("Doctor molecule: %d warning(s): %s", len(warnings), summary)
 	mol.closeStep("report")
 }
-
 
 // checkAllRigsDolt verifies all rigs are using the Dolt backend.
 func (d *Daemon) checkAllRigsDolt() error {
@@ -1600,9 +1599,15 @@ func isRunningFromPID(townRoot string) (bool, int, error) {
 }
 
 // StopDaemon stops the running daemon for the given town.
+func StopDaemon(townRoot string) error {
+	return StopDaemonWithSource(townRoot, "unspecified")
+}
+
+// StopDaemonWithSource stops the running daemon for the given town and logs the
+// caller before sending SIGTERM so shutdowns have an audit trail.
 // Note: The file lock in Run() prevents multiple daemons per town, so we only
 // need to kill the process from the PID file.
-func StopDaemon(townRoot string) error {
+func StopDaemonWithSource(townRoot, source string) error {
 	running, pid, err := IsRunning(townRoot)
 	if err != nil {
 		return err
@@ -1625,6 +1630,8 @@ func StopDaemon(townRoot string) error {
 	if err != nil {
 		return fmt.Errorf("finding process: %w", err)
 	}
+
+	logDaemonSignalAudit(townRoot, source, pid, "daemon")
 
 	// Send SIGTERM for graceful shutdown
 	if err := process.Signal(syscall.SIGTERM); err != nil {
@@ -1701,6 +1708,12 @@ func FindOrphanedDaemons(townRoot string) ([]int, error) {
 // KillOrphanedDaemons finds and kills any orphaned gt daemon processes.
 // Returns number of processes killed.
 func KillOrphanedDaemons(townRoot string) (int, error) {
+	return KillOrphanedDaemonsWithSource(townRoot, "unspecified")
+}
+
+// KillOrphanedDaemonsWithSource finds and kills any orphaned gt daemon
+// processes and logs the caller before sending SIGTERM.
+func KillOrphanedDaemonsWithSource(townRoot, source string) (int, error) {
 	pids, err := FindOrphanedDaemons(townRoot)
 	if err != nil {
 		return 0, err
@@ -1712,6 +1725,8 @@ func KillOrphanedDaemons(townRoot string) (int, error) {
 		if err != nil {
 			continue
 		}
+
+		logDaemonSignalAudit(townRoot, source, pid, "orphaned daemon")
 
 		// Try SIGTERM first
 		if err := process.Signal(syscall.SIGTERM); err != nil {

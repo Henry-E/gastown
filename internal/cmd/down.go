@@ -220,7 +220,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		if running {
-			if err := daemon.StopDaemon(townRoot); err != nil {
+			if err := daemon.StopDaemonWithSource(townRoot, "gt down"); err != nil {
 				printDownStatus("Daemon", false, err.Error())
 				allOK = false
 			} else if pid > 0 {
@@ -546,4 +546,3 @@ func findOrphanedClaudeProcesses(townRoot string) []int {
 
 	return orphaned
 }
-
