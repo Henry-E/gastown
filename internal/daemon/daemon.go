@@ -825,7 +825,53 @@ func (d *Daemon) bootSpawnCooldown() time.Duration {
 	return d.loadOperationalConfig().GetDaemonConfig().BootSpawnCooldownD()
 }
 
+// shouldRunBootTriage determines whether spawning Boot is worth the token cost.
+// Boot should only run when there is a concrete signal that Deacon needs help:
+// session missing, stale/missing heartbeat, or pending deacon/lifecycle events.
+func (d *Daemon) shouldRunBootTriage() (bool, string) {
+	// Urgent work gates: if there is pending deacon/lifecycle work, run Boot.
+	if d.hasPendingEvents("deacon") || d.hasPendingEvents("lifecycle") {
+		return true, "pending deacon/lifecycle events"
+	}
+
+	sessionName := d.getDeaconSessionName()
+	hasSession, err := d.tmux.HasSession(sessionName)
+	if err != nil {
+		// Fail-open: if we can't verify state, let Boot triage.
+		return true, fmt.Sprintf("tmux session check failed: %v", err)
+	}
+	if !hasSession {
+		return true, "deacon session missing"
+	}
+
+	// Deacon just started and has no pending work; avoid waking Boot while
+	// startup hooks and first patrol cycle are still in progress.
+	if !d.deaconLastStarted.IsZero() && time.Since(d.deaconLastStarted) < d.deaconGracePeriod() {
+		return false, "deacon in startup grace period"
+	}
+
+	hb := deacon.ReadHeartbeat(d.config.TownRoot)
+	if hb == nil {
+		return true, "deacon heartbeat missing"
+	}
+
+	age := hb.Age()
+	staleThreshold := d.loadOperationalConfig().GetDeaconConfig().HeartbeatStaleThresholdD()
+	if age >= staleThreshold {
+		return true, fmt.Sprintf("deacon heartbeat stale (%s old)", age.Round(time.Second))
+	}
+
+	return false, fmt.Sprintf("deacon healthy/idle (heartbeat %s old)", age.Round(time.Second))
+}
+
 func (d *Daemon) ensureBootRunning() {
+	// Reason gate: skip expensive Boot spawn unless there is a concrete signal.
+	shouldRun, reason := d.shouldRunBootTriage()
+	if !shouldRun {
+		d.logger.Printf("Skipping Boot triage: %s", reason)
+		return
+	}
+
 	// Cooldown gate: skip if Boot was spawned recently (fixes #2084)
 	if !d.bootLastSpawned.IsZero() && time.Since(d.bootLastSpawned) < d.bootSpawnCooldown() {
 		d.logger.Printf("Boot spawned %s ago, within cooldown (%s), skipping",
@@ -845,7 +891,7 @@ func (d *Daemon) ensureBootRunning() {
 	}
 
 	// Spawn Boot in a fresh tmux session
-	d.logger.Println("Spawning Boot for triage...")
+	d.logger.Printf("Spawning Boot for triage (%s)...", reason)
 	if err := b.Spawn(""); err != nil {
 		d.logger.Printf("Error spawning Boot: %v, falling back to direct Deacon check", err)
 		// Fallback: ensure Deacon is running directly

@@ -8,7 +8,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/steveyegge/gastown/internal/deacon"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
@@ -44,8 +46,10 @@ if [[ "${1:-}" == "-V" ]]; then
   exit 0
 fi
 
-# Keep session checks simple for this regression repro: no existing boot session.
 if [[ "$cmd" == "has-session" ]]; then
+  if [[ "${TMUX_HAS_SESSION:-0}" == "1" ]]; then
+    exit 0
+  fi
   exit 1
 fi
 
@@ -73,6 +77,7 @@ func TestEnsureBootRunning_DoesNotSpawnEveryTick(t *testing.T) {
 	writeFakeTmux(t, fakeBinDir)
 	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("TMUX_HAS_SESSION", "0")
 	t.Setenv("GT_DEGRADED", "false")
 
 	d := &Daemon{
@@ -100,5 +105,51 @@ func TestEnsureBootRunning_DoesNotSpawnEveryTick(t *testing.T) {
 	}
 	if spawns != 1 {
 		t.Fatalf("boot spawn count = %d, want 1 (avoid spawning every daemon tick)", spawns)
+	}
+}
+
+// Regression test for hq-vjh84f:
+// when Deacon is healthy and there is no pending work, Boot should not spawn.
+func TestEnsureBootRunning_SkipsWhenDeaconHealthyAndIdle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows — fake tmux requires bash")
+	}
+	townRoot := t.TempDir()
+	fakeBinDir := t.TempDir()
+	tmuxLog := filepath.Join(t.TempDir(), "tmux.log")
+	if err := os.WriteFile(tmuxLog, []byte{}, 0o644); err != nil {
+		t.Fatalf("create tmux log: %v", err)
+	}
+	writeFakeTmux(t, fakeBinDir)
+
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("TMUX_HAS_SESSION", "1")
+	t.Setenv("GT_DEGRADED", "false")
+
+	// Fresh heartbeat => healthy, so Boot should be skipped.
+	if err := deacon.WriteHeartbeat(townRoot, &deacon.Heartbeat{
+		Timestamp: time.Now().UTC(),
+		Cycle:     1,
+	}); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+
+	d := &Daemon{
+		config: &Config{TownRoot: townRoot},
+		logger: log.New(io.Discard, "", 0),
+		tmux:   tmux.NewTmux(),
+	}
+
+	d.ensureBootRunning()
+
+	data, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatalf("read tmux log: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.HasPrefix(line, "new-session ") {
+			t.Fatalf("boot should not spawn when deacon is healthy/idle, got tmux new-session line: %q", line)
+		}
 	}
 }

@@ -36,6 +36,35 @@ type WispReaperConfig struct {
 	Databases    []string `json:"databases,omitempty"`
 }
 
+// wispReaperPreflightSummary aggregates mechanical scan results used to decide
+// whether to skip, run inline, or dispatch to a Dog.
+type wispReaperPreflightSummary struct {
+	DatabasesScanned  int
+	ScanErrors        int
+	ReapCandidates    int
+	PurgeCandidates   int
+	MailCandidates    int
+	StaleCandidates   int
+	OpenWisps         int
+	AnomalyCount      int
+	ThresholdBreaches int
+}
+
+func (s wispReaperPreflightSummary) candidateCount() int {
+	return s.ReapCandidates + s.PurgeCandidates + s.MailCandidates + s.StaleCandidates
+}
+
+// hasActionableWork reports whether cleanup should run this cycle.
+func (s wispReaperPreflightSummary) hasActionableWork() bool {
+	return s.candidateCount() > 0 || s.AnomalyCount > 0 || s.ThresholdBreaches > 0 || s.ScanErrors > 0
+}
+
+// shouldDispatchDog reports whether this cycle needs agent reasoning rather
+// than routine inline execution.
+func (s wispReaperPreflightSummary) shouldDispatchDog() bool {
+	return s.AnomalyCount > 0 || s.ThresholdBreaches > 0
+}
+
 // wispReaperInterval returns the configured interval, or the default (1h).
 func wispReaperInterval(config *DaemonPatrolConfig) time.Duration {
 	if config != nil && config.Patrols != nil && config.Patrols.WispReaper != nil {
@@ -72,10 +101,66 @@ func wispDeleteAge(config *DaemonPatrolConfig) time.Duration {
 	return defaultWispDeleteAge
 }
 
+// wispReaperPreflight performs a mechanical scan across candidate databases.
+// This avoids waking a Dog for routine no-op cycles.
+func (d *Daemon) wispReaperPreflight(config *WispReaperConfig, maxAge, deleteAge time.Duration) (*wispReaperPreflightSummary, error) {
+	summary := &wispReaperPreflightSummary{}
+
+	databases := config.Databases
+	if len(databases) == 0 {
+		databases = reaper.DiscoverDatabases("127.0.0.1", d.doltServerPort())
+	}
+	if len(databases) == 0 {
+		return summary, fmt.Errorf("no databases discovered")
+	}
+
+	for _, dbName := range databases {
+		if err := reaper.ValidateDBName(dbName); err != nil {
+			summary.ScanErrors++
+			d.logger.Printf("wisp_reaper: preflight: skip invalid db name %q: %v", dbName, err)
+			continue
+		}
+
+		db, err := reaper.OpenDB("127.0.0.1", d.doltServerPort(), dbName, 10*time.Second, 10*time.Second)
+		if err != nil {
+			summary.ScanErrors++
+			d.logger.Printf("wisp_reaper: preflight: %s: connect error: %v", dbName, err)
+			continue
+		}
+
+		scan, err := reaper.Scan(db, dbName, maxAge, deleteAge, defaultMailDeleteAge, defaultStaleIssueAge)
+		_ = db.Close()
+		if err != nil {
+			summary.ScanErrors++
+			d.logger.Printf("wisp_reaper: preflight: %s: scan error: %v", dbName, err)
+			continue
+		}
+
+		summary.DatabasesScanned++
+		summary.ReapCandidates += scan.ReapCandidates
+		summary.PurgeCandidates += scan.PurgeCandidates
+		summary.MailCandidates += scan.MailCandidates
+		summary.StaleCandidates += scan.StaleCandidates
+		summary.OpenWisps += scan.OpenWisps
+		summary.AnomalyCount += len(scan.Anomalies)
+		if scan.OpenWisps > wispAlertThreshold {
+			summary.ThresholdBreaches++
+		}
+	}
+
+	if summary.DatabasesScanned == 0 && summary.ScanErrors > 0 {
+		return summary, fmt.Errorf("all preflight scans failed")
+	}
+
+	return summary, nil
+}
+
 // reapWisps is the thin orchestrator for the wisp_reaper patrol.
-// It pours a mol-dog-reaper molecule, then dispatches a Dog to execute it.
-// The Dog reads the formula steps and calls `gt reaper` CLI helpers.
-// Falls back to inline execution if Dog dispatch fails.
+// It runs a cheap preflight first:
+//   - no actionable candidates -> skip cycle (no dog dispatch)
+//   - routine candidates -> run inline mechanical cleanup
+//   - anomalies/threshold breach -> dispatch Dog for reasoning
+// Dog dispatch still falls back to inline execution on failure.
 func (d *Daemon) reapWisps() {
 	if !IsPatrolEnabled(d.patrolConfig, "wisp_reaper") {
 		return
@@ -101,6 +186,16 @@ func (d *Daemon) reapWisps() {
 		vars["databases"] = strings.Join(config.Databases, ",")
 	}
 
+	preflight, err := d.wispReaperPreflight(config, maxAge, deleteAge)
+	if err != nil {
+		d.logger.Printf("wisp_reaper: preflight error: %v", err)
+	}
+	if err == nil && !preflight.hasActionableWork() {
+		d.logger.Printf("wisp_reaper: no actionable candidates (databases=%d), skipping cycle",
+			preflight.DatabasesScanned)
+		return
+	}
+
 	// Pour the molecule for observability tracking.
 	mol := d.pourDogMolecule(constants.MolDogReaper, vars)
 	defer mol.close()
@@ -109,14 +204,24 @@ func (d *Daemon) reapWisps() {
 		d.logger.Printf("wisp_reaper: DRY RUN — reporting only, no changes will be made")
 	}
 
-	// Try dispatching to a Dog for formula-driven execution.
-	if err := d.dispatchReaperDog(vars); err != nil {
-		d.logger.Printf("wisp_reaper: Dog dispatch failed (%v), running inline fallback", err)
+	// Prefer mechanical inline execution for routine cleanup cycles.
+	if preflight != nil && err == nil && !preflight.shouldDispatchDog() {
+		d.logger.Printf(
+			"wisp_reaper: running inline (routine) candidates=%d scan_errors=%d databases=%d",
+			preflight.candidateCount(), preflight.ScanErrors, preflight.DatabasesScanned,
+		)
 		d.reapWispsInline(config, maxAge, deleteAge, mol)
 		return
 	}
 
-	d.logger.Printf("wisp_reaper: dispatched to Dog for formula-driven execution")
+	// Anomaly path: use Dog triage/reasoning.
+	if dispatchErr := d.dispatchReaperDog(vars); dispatchErr != nil {
+		d.logger.Printf("wisp_reaper: Dog dispatch failed (%v), running inline fallback", dispatchErr)
+		d.reapWispsInline(config, maxAge, deleteAge, mol)
+		return
+	}
+
+	d.logger.Printf("wisp_reaper: dispatched to Dog (anomaly path) for formula-driven execution")
 }
 
 // dispatchReaperDog dispatches the mol-dog-reaper formula to a Dog via gt sling.

@@ -73,3 +73,26 @@ func TestDefaultReaperIntervalIsOneHour(t *testing.T) {
 		t.Errorf("expected default interval 1h, got %v", defaultWispReaperInterval)
 	}
 }
+
+func TestWispReaperPreflightSummary_HasActionableWork(t *testing.T) {
+	empty := wispReaperPreflightSummary{}
+	if empty.hasActionableWork() {
+		t.Fatal("expected empty summary to be non-actionable")
+	}
+
+	routine := wispReaperPreflightSummary{ReapCandidates: 2}
+	if !routine.hasActionableWork() {
+		t.Fatal("expected candidate summary to be actionable")
+	}
+	if routine.shouldDispatchDog() {
+		t.Fatal("expected routine candidate summary to stay inline (no dog dispatch)")
+	}
+
+	anomaly := wispReaperPreflightSummary{AnomalyCount: 1}
+	if !anomaly.hasActionableWork() {
+		t.Fatal("expected anomaly summary to be actionable")
+	}
+	if !anomaly.shouldDispatchDog() {
+		t.Fatal("expected anomaly summary to dispatch dog")
+	}
+}
