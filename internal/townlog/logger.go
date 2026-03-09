@@ -27,6 +27,8 @@ const (
 	EventCrash EventType = "crash"
 	// EventKill indicates an agent was killed intentionally.
 	EventKill EventType = "kill"
+	// EventSignal indicates an intentional signal was sent and audited.
+	EventSignal EventType = "signal"
 	// EventCallback indicates a callback was processed during patrol.
 	EventCallback EventType = "callback"
 
@@ -46,7 +48,7 @@ const (
 type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Type      EventType `json:"type"`
-	Agent     string    `json:"agent"`            // e.g., "gastown/crew/max" or "gastown/polecats/Toast"
+	Agent     string    `json:"agent"`             // e.g., "gastown/crew/max" or "gastown/polecats/Toast"
 	Context   string    `json:"context,omitempty"` // Additional context (issue ID, error message, etc.)
 }
 
@@ -155,6 +157,12 @@ func formatLogLine(e Event) string {
 			detail = fmt.Sprintf("killed (%s)", e.Context)
 		} else {
 			detail = "killed"
+		}
+	case EventSignal:
+		if e.Context != "" {
+			detail = e.Context
+		} else {
+			detail = "signal sent"
 		}
 	case EventCallback:
 		if e.Context != "" {

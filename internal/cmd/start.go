@@ -939,7 +939,7 @@ func stopDaemonIfRunning(townRoot string) {
 
 	if running {
 		// PID file points to live daemon - stop it
-		if err := daemon.StopDaemon(townRoot); err != nil {
+		if err := daemon.StopDaemonWithSource(townRoot, "gt start shutdown cleanup"); err != nil {
 			fmt.Printf("  %s Failed to stop daemon (PID %d): %s\n",
 				style.Bold.Render("✗"), pid, err.Error())
 		} else {
@@ -961,7 +961,7 @@ func stopDaemonIfRunning(townRoot string) {
 		fmt.Printf("  %s Found %d orphaned daemon process(es): %v\n",
 			style.Bold.Render("⚠"), len(orphaned), orphaned)
 
-		killed, err := daemon.KillOrphanedDaemons(townRoot)
+		killed, err := daemon.KillOrphanedDaemonsWithSource(townRoot, "gt start orphan cleanup")
 		if err != nil {
 			fmt.Printf("  %s Failed to kill orphaned daemons: %v\n",
 				style.Bold.Render("✗"), err)

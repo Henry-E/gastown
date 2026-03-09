@@ -13,7 +13,6 @@ func TestConsumePatrolHeartbeatCredit_BootstrapOnce(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	// First consume seeds bootstrap credits and decrements by one
 	remaining, err := ConsumePatrolHeartbeatCredit(tmpDir)
 	if err != nil {
 		t.Fatalf("first consume returned error: %v", err)

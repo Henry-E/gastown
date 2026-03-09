@@ -938,7 +938,7 @@ func (d *Daemon) listAgentBeadsJSON(dest interface{}) error {
 		if issuesErr != nil {
 			return fmt.Errorf("bd list failed: %w", issuesErr)
 		}
-		return fmt.Errorf("no agent beads found")
+		return json.Unmarshal([]byte("[]"), dest)
 	}
 
 	return json.Unmarshal(combined, dest)

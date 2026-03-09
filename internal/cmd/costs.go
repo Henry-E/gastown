@@ -29,6 +29,9 @@ var (
 	costsWeek    bool
 	costsByRole  bool
 	costsByRig   bool
+	costsByAgent bool
+	costsSince   string
+	costsAgent   string
 	costsVerbose bool
 
 	// Record subcommand flags
@@ -53,14 +56,17 @@ var costsCmd = &cobra.Command{
 Costs are calculated from Claude Code transcript files at ~/.claude/projects/
 by summing token usage from assistant messages and applying model-specific pricing.
 
-Examples:
-  gt costs              # Live costs from running sessions
-  gt costs --today      # Today's costs from log file (not yet digested)
-  gt costs --week       # This week's costs from digest beads + today's log
-  gt costs --by-role    # Breakdown by role (polecat, witness, etc.)
-  gt costs --by-rig     # Breakdown by rig
-  gt costs --json       # Output as JSON
-  gt costs -v           # Show debug output for failures
+	Examples:
+	  gt costs              # Live costs from running sessions
+	  gt costs --today      # Today's costs from log file (not yet digested)
+	  gt costs --week       # This week's costs from digest beads + today's log
+	  gt costs --since 1h   # Costs from the last hour
+	  gt costs --since 2h --agent barnaby/witness  # Single agent in a window
+	  gt costs --by-role    # Breakdown by role (polecat, witness, etc.)
+	  gt costs --by-rig     # Breakdown by rig
+	  gt costs --by-agent   # Breakdown by agent identity (aggregates handoffs)
+	  gt costs --json       # Output as JSON
+	  gt costs -v           # Show debug output for failures
 
 Subcommands:
   gt costs record       # Record session cost to local log file (Stop hook)
@@ -135,6 +141,9 @@ func init() {
 	costsCmd.Flags().BoolVar(&costsWeek, "week", false, "Show this week's total from session events")
 	costsCmd.Flags().BoolVar(&costsByRole, "by-role", false, "Show breakdown by role")
 	costsCmd.Flags().BoolVar(&costsByRig, "by-rig", false, "Show breakdown by rig")
+	costsCmd.Flags().BoolVar(&costsByAgent, "by-agent", false, "Show breakdown by canonical agent identity")
+	costsCmd.Flags().StringVar(&costsSince, "since", "", "Filter to entries since duration or timestamp (e.g. 1h, 90m, 2026-03-06T14:00:00Z)")
+	costsCmd.Flags().StringVar(&costsAgent, "agent", "", "Filter to a single agent identity (e.g. deacon, barnaby/witness, barnaby/crew/maude)")
 	costsCmd.Flags().BoolVarP(&costsVerbose, "verbose", "v", false, "Show debug output for failures")
 
 	// Add record subcommand
@@ -181,7 +190,9 @@ type CostsOutput struct {
 	Total    float64            `json:"total_usd"`
 	ByRole   map[string]float64 `json:"by_role,omitempty"`
 	ByRig    map[string]float64 `json:"by_rig,omitempty"`
+	ByAgent  map[string]float64 `json:"by_agent,omitempty"`
 	Period   string             `json:"period,omitempty"`
+	Agent    string             `json:"agent,omitempty"`
 }
 
 // costRegex matches cost patterns like "$1.23" or "$12.34"
@@ -197,8 +208,8 @@ type TranscriptMessage struct {
 
 // TranscriptMessageBody contains the message content and usage info.
 type TranscriptMessageBody struct {
-	Model string          `json:"model"`
-	Role  string          `json:"role"`
+	Model string           `json:"model"`
+	Role  string           `json:"role"`
 	Usage *TranscriptUsage `json:"usage,omitempty"`
 }
 
@@ -239,12 +250,43 @@ var modelPricing = map[string]struct {
 
 func runCosts(cmd *cobra.Command, args []string) error {
 	// If querying ledger, use ledger functions
-	if costsToday || costsWeek || costsByRole || costsByRig {
+	if costsToday || costsWeek || costsByRole || costsByRig || costsByAgent || costsSince != "" || costsAgent != "" {
 		return runCostsFromLedger()
 	}
 
 	// Default: show live costs from running sessions
 	return runLiveCosts()
+}
+
+func parseSinceFilter(raw string, now time.Time) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+
+	if dur, err := time.ParseDuration(raw); err == nil {
+		if dur < 0 {
+			return time.Time{}, fmt.Errorf("invalid --since %q: duration must be non-negative", raw)
+		}
+		return now.Add(-dur), nil
+	}
+
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts, nil
+	}
+
+	layouts := []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if ts, err := time.ParseInLocation(layout, raw, now.Location()); err == nil {
+			return ts, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("invalid --since %q (use duration like 1h/90m or timestamp like 2026-03-06T14:00:00Z)", raw)
 }
 
 func runLiveCosts() error {
@@ -320,6 +362,10 @@ func runCostsFromLedger() error {
 	now := time.Now()
 	var entries []CostEntry
 	var err error
+	sinceTime, err := parseSinceFilter(costsSince, now)
+	if err != nil {
+		return err
+	}
 
 	if costsToday {
 		// For today: query ephemeral wisps (not yet digested)
@@ -339,8 +385,13 @@ func runCostsFromLedger() error {
 		// Also include today's wisps (not yet digested)
 		todayEntries, _ := querySessionCostEntries(now)
 		entries = append(entries, todayEntries...)
-	} else if costsByRole || costsByRig {
-		// When using --by-role or --by-rig without time filter, default to today
+	} else if !sinceTime.IsZero() {
+		entries, err = querySessionCostEntriesSince(sinceTime, now)
+		if err != nil {
+			return fmt.Errorf("querying session cost entries: %w", err)
+		}
+	} else if costsByRole || costsByRig || costsByAgent || costsAgent != "" {
+		// When using breakdown/agent filters without an explicit time filter, default to today
 		// (querying all historical events would be expensive and likely empty)
 		entries, err = querySessionCostEntries(now)
 		if err != nil {
@@ -352,8 +403,16 @@ func runCostsFromLedger() error {
 		entries = querySessionEvents()
 	}
 
+	if costsAgent != "" {
+		entries = filterEntriesByAgent(entries, costsAgent)
+	}
+
 	if len(entries) == 0 {
-		fmt.Println(style.Dim.Render("No cost data found. Costs are recorded when sessions end."))
+		msg := "No cost data found. Costs are recorded when sessions end."
+		if costsAgent != "" {
+			msg = fmt.Sprintf("No cost data found for agent %q in the selected period.", costsAgent)
+		}
+		fmt.Println(style.Dim.Render(msg))
 		return nil
 	}
 
@@ -361,6 +420,7 @@ func runCostsFromLedger() error {
 	var total float64
 	byRole := make(map[string]float64)
 	byRig := make(map[string]float64)
+	byAgent := make(map[string]float64)
 
 	for _, entry := range entries {
 		total += entry.CostUSD
@@ -368,6 +428,7 @@ func runCostsFromLedger() error {
 		if entry.Rig != "" {
 			byRig[entry.Rig] += entry.CostUSD
 		}
+		byAgent[canonicalAgentIdentity(entry.Role, entry.Rig, entry.Worker)] += entry.CostUSD
 	}
 
 	// Build output
@@ -381,12 +442,20 @@ func runCostsFromLedger() error {
 	if costsByRig {
 		output.ByRig = byRig
 	}
+	if costsByAgent {
+		output.ByAgent = byAgent
+	}
 
 	// Set period label
 	if costsToday {
 		output.Period = "today"
 	} else if costsWeek {
 		output.Period = "this week"
+	} else if costsSince != "" {
+		output.Period = fmt.Sprintf("since %s", costsSince)
+	}
+	if costsAgent != "" {
+		output.Agent = costsAgent
 	}
 
 	if costsJSON {
@@ -676,6 +745,97 @@ func parseSessionName(sess string) (role, rig, worker string) {
 	default:
 		return "unknown", identity.Rig, identity.Name
 	}
+}
+
+func canonicalAgentIdentity(role, rig, worker string) string {
+	role = strings.TrimSpace(role)
+	rig = strings.TrimSpace(rig)
+	worker = strings.TrimSpace(worker)
+
+	switch role {
+	case constants.RoleMayor, constants.RoleDeacon:
+		return role
+	case constants.RoleWitness, constants.RoleRefinery:
+		if rig != "" {
+			return rig + "/" + role
+		}
+		return role
+	case constants.RoleCrew, constants.RolePolecat:
+		if rig != "" && worker != "" {
+			return rig + "/" + role + "/" + worker
+		}
+		if worker != "" {
+			return role + "/" + worker
+		}
+		if rig != "" {
+			return rig + "/" + role
+		}
+		return role
+	default:
+		parts := make([]string, 0, 3)
+		if rig != "" {
+			parts = append(parts, rig)
+		}
+		if role != "" {
+			parts = append(parts, role)
+		}
+		if worker != "" {
+			parts = append(parts, worker)
+		}
+		if len(parts) == 0 {
+			return "unknown"
+		}
+		return strings.Join(parts, "/")
+	}
+}
+
+func normalizeAgentKey(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+func entryMatchesAgent(entry CostEntry, selector string) bool {
+	if selector == "" {
+		return true
+	}
+	selector = normalizeAgentKey(selector)
+	canonical := canonicalAgentIdentity(entry.Role, entry.Rig, entry.Worker)
+
+	candidates := []string{
+		normalizeAgentKey(canonical),
+		normalizeAgentKey(entry.SessionID),
+		normalizeAgentKey(entry.Role),
+		normalizeAgentKey(entry.Rig),
+		normalizeAgentKey(entry.Worker),
+	}
+	if entry.Rig != "" && entry.Role != "" {
+		candidates = append(candidates, normalizeAgentKey(entry.Rig+"/"+entry.Role))
+	}
+	if entry.Rig != "" && entry.Worker != "" {
+		candidates = append(candidates, normalizeAgentKey(entry.Rig+"/"+entry.Worker))
+	}
+	if entry.Role != "" && entry.Worker != "" {
+		candidates = append(candidates, normalizeAgentKey(entry.Role+"/"+entry.Worker))
+	}
+
+	for _, candidate := range candidates {
+		if candidate == selector {
+			return true
+		}
+	}
+	return false
+}
+
+func filterEntriesByAgent(entries []CostEntry, selector string) []CostEntry {
+	if selector == "" {
+		return entries
+	}
+	filtered := make([]CostEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entryMatchesAgent(entry, selector) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 // extractCost finds the most recent cost value in pane content.

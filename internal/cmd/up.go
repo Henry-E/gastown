@@ -437,6 +437,7 @@ func ensureDaemon(townRoot string) error {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
+	daemon.PrepareDetachedCommand(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return err
@@ -904,4 +905,3 @@ func waitForDoltReady(townRoot string) {
 		fmt.Fprintf(os.Stderr, "Warning: %v (agents may see connection errors)\n", err)
 	}
 }
-

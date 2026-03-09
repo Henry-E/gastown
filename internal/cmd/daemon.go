@@ -192,6 +192,7 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 	daemonCmd.Stdin = nil
 	daemonCmd.Stdout = nil
 	daemonCmd.Stderr = nil
+	daemon.PrepareDetachedCommand(daemonCmd)
 
 	if err := daemonCmd.Start(); err != nil {
 		return fmt.Errorf("starting daemon: %w", err)
@@ -236,7 +237,7 @@ func runDaemonStop(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon is not running")
 	}
 
-	if err := daemon.StopDaemon(townRoot); err != nil {
+	if err := daemon.StopDaemonWithSource(townRoot, "gt daemon stop"); err != nil {
 		return fmt.Errorf("stopping daemon: %w", err)
 	}
 
