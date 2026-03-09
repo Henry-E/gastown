@@ -41,8 +41,8 @@ description = "Lint command (e.g., eslint .). Empty = skip."
 default = ""
 
 [vars.test_command]
-description = "Test command to run (if run_tests is true)"
-default = "go test ./..."
+description = "Test command to run (if run_tests is true). Empty = skip tests with warning."
+default = ""
 
 [vars.build_command]
 description = "Build command (e.g., go build ./...). Empty = skip."
@@ -165,10 +165,13 @@ Run configured checks (skip empty commands):
 {{build_command}}
 ```
 
-If run_tests = "true", run:
+If run_tests = "true" and test_command is non-empty, run:
 ```bash
 {{test_command}}
 ```
+
+If run_tests = "true" but test_command is empty, log a warning:
+"No test_command configured — skipping tests" and treat as pass.
 
 Track exactly which check/test failed for handle-failures.
 """
@@ -182,6 +185,8 @@ If all checks/tests pass, continue to merge-push.
 
 If any check/test fails, diagnose branch regression vs pre-existing target failure.
 
+If test_command is empty, log a warning and skip to merge-push (treat as pass).
+
 If branch regression:
 ```bash
 bd update <issue-id> --status=open --assignee=""
@@ -193,9 +198,9 @@ Rig: <rig>
 FailureType: quality-check
 Error: <failure description>"
 bd close <mr-bead-id> --reason "Rejected: <failure description>"
-git push origin --delete <polecat-branch>
 gt mail archive <merge-ready-message-id>
 ```
+Do NOT delete the remote branch — the witness decides cleanup.
 Skip to loop-check.
 
 If pre-existing on target branch:

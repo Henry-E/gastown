@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -316,12 +317,43 @@ func buildRefineryPatrolVars(ctx RoleContext) []string {
 	if mq.LintCommand != "" {
 		vars = append(vars, fmt.Sprintf("lint_command=%s", mq.LintCommand))
 	}
-	if mq.TestCommand != "" {
-		vars = append(vars, fmt.Sprintf("test_command=%s", mq.TestCommand))
+	testCmd := mq.TestCommand
+	if testCmd == "" {
+		// Auto-detect test command from project files in the refinery clone.
+		// Without this, rigs with no explicit test_command get the formula default
+		// (empty = skip tests), which is safe but suboptimal. Auto-detection
+		// ensures the right runner is used without manual config.
+		refineryClone := filepath.Join(rigPath, constants.DirRefinery, "rig")
+		testCmd = detectTestCommand(refineryClone)
+	}
+	if testCmd != "" {
+		vars = append(vars, fmt.Sprintf("test_command=%s", testCmd))
 	}
 	if mq.BuildCommand != "" {
 		vars = append(vars, fmt.Sprintf("build_command=%s", mq.BuildCommand))
 	}
 	vars = append(vars, fmt.Sprintf("delete_merged_branches=%t", mq.IsDeleteMergedBranchesEnabled()))
 	return vars
+}
+
+// detectTestCommand auto-detects the appropriate test command by looking for
+// project manifest files in the given directory. Returns empty string if
+// detection fails (caller should skip tests or use formula default).
+func detectTestCommand(projectDir string) string {
+	checks := []struct {
+		file string
+		cmd  string
+	}{
+		{"Cargo.toml", "cargo test --workspace"},
+		{"go.mod", "go test ./..."},
+		{"package.json", "npm test"},
+		{"pyproject.toml", "pytest"},
+		{"Makefile", "make test"},
+	}
+	for _, c := range checks {
+		if _, err := os.Stat(filepath.Join(projectDir, c.file)); err == nil {
+			return c.cmd
+		}
+	}
+	return ""
 }
