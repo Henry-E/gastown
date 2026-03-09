@@ -518,7 +518,7 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 		Recipient: "deacon",
 		Sender:    "daemon",
 		Topic:     "patrol",
-	}, "I am Deacon. First run `gt deacon heartbeat`. Then check gt hook, if empty create mol-deacon-patrol wisp and execute it.")
+	}, "I am Deacon. First run `gt deacon heartbeat` once. Then check gt hook; if empty create mol-deacon-patrol wisp and execute it. Never run batch loops of `gt deacon heartbeat` or `gt patrol report`.")
 	startupCmd, err := config.BuildStartupCommandFromConfig(config.AgentEnvConfig{
 		Role:        "deacon",
 		TownRoot:    townRoot,

@@ -72,6 +72,11 @@ type Daemon struct {
 	// Only accessed from heartbeat loop goroutine - no sync needed.
 	syncFailures map[string]int
 
+	// warnedMissingWispConfig tracks rigs we've already warned about missing
+	// local wisp config for, so the daemon doesn't emit the same warning every
+	// heartbeat forever.
+	warnedMissingWispConfig map[string]bool
+
 	// PATCH-006: Resolved binary paths to avoid PATH issues in subprocesses.
 	gtPath string
 	bdPath string
@@ -235,18 +240,19 @@ func New(config *Config) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		config:         config,
-		patrolConfig:   patrolConfig,
-		tmux:           tmux.NewTmux(),
-		logger:         logger,
-		ctx:            ctx,
-		cancel:         cancel,
-		doltServer:     doltServer,
-		gtPath:         gtPath,
-		bdPath:         bdPath,
-		restartTracker: restartTracker,
-		otelProvider:   otelProvider,
-		metrics:        dm,
+		config:                  config,
+		patrolConfig:            patrolConfig,
+		tmux:                    tmux.NewTmux(),
+		logger:                  logger,
+		ctx:                     ctx,
+		cancel:                  cancel,
+		doltServer:              doltServer,
+		gtPath:                  gtPath,
+		bdPath:                  bdPath,
+		restartTracker:          restartTracker,
+		otelProvider:            otelProvider,
+		metrics:                 dm,
+		warnedMissingWispConfig: make(map[string]bool),
 	}, nil
 }
 
@@ -1358,11 +1364,6 @@ func (d *Daemon) getPatrolRigs(patrol string) []string {
 func (d *Daemon) isRigOperational(rigName string) (bool, string) {
 	cfg := wisp.NewConfig(d.config.TownRoot, rigName)
 
-	// Warn if wisp config is missing - parked/docked state may have been lost
-	if _, err := os.Stat(cfg.ConfigPath()); os.IsNotExist(err) {
-		d.logger.Printf("Warning: no wisp config for %s - parked state may have been lost", rigName)
-	}
-
 	// Check wisp layer first (local/ephemeral overrides)
 	status := cfg.GetString("status")
 	switch status {
@@ -1389,6 +1390,13 @@ func (d *Daemon) isRigOperational(rigName string) (bool, string) {
 				}
 			}
 		}
+	}
+
+	// Missing local wisp config is only interesting for otherwise-operational rigs.
+	// For globally docked/parked rigs it's expected and just creates log spam.
+	if _, err := os.Stat(cfg.ConfigPath()); os.IsNotExist(err) && !d.warnedMissingWispConfig[rigName] {
+		d.logger.Printf("Warning: no wisp config for %s - using default operational state", rigName)
+		d.warnedMissingWispConfig[rigName] = true
 	}
 
 	// Check auto_restart config
