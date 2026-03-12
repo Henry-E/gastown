@@ -42,6 +42,10 @@ external_projects:
 # Custom issue types for Gas Town (fallback when database is unavailable)
 types.custom: "agent,role,rig,convoy,slot,queue,event,message,molecule,gate,merge-request"
 
+backup:
+  enabled: false
+  git-push: false
+
 prefix: 
 issue-prefix: 
 dolt.idle-timeout: "0"
