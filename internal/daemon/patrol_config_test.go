@@ -79,6 +79,33 @@ func TestIsPatrolEnabled_DoltRemotes(t *testing.T) {
 	}
 }
 
+func TestIsPatrolEnabled_Handler(t *testing.T) {
+	// handler (dog dispatch) defaults to disabled even with nil config
+	if IsPatrolEnabled(nil, "handler") {
+		t.Error("expected handler to be disabled with nil config")
+	}
+
+	// handler defaults to disabled when patrols section exists but Handler is nil
+	config := &DaemonPatrolConfig{
+		Patrols: &PatrolsConfig{},
+	}
+	if IsPatrolEnabled(config, "handler") {
+		t.Error("expected handler to be disabled by default")
+	}
+
+	// Explicitly enabled
+	config.Patrols.Handler = &PatrolConfig{Enabled: true}
+	if !IsPatrolEnabled(config, "handler") {
+		t.Error("expected handler to be enabled when configured")
+	}
+
+	// Explicitly disabled
+	config.Patrols.Handler = &PatrolConfig{Enabled: false}
+	if IsPatrolEnabled(config, "handler") {
+		t.Error("expected handler to be disabled when explicitly disabled")
+	}
+}
+
 func TestSaveAndLoadPatrolConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 

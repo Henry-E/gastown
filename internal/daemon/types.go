@@ -306,9 +306,13 @@ func IsPatrolEnabled(config *DaemonPatrolConfig, patrol string) bool {
 			return config.Patrols.Deacon.Enabled
 		}
 	case "handler":
+		// Dog dispatch defaults to disabled — must be explicitly enabled in
+		// daemon.json. Without this, dogs silently spawn every heartbeat
+		// even when deacon/doctor_dog/compactor_dog are all disabled. (#2773)
 		if config.Patrols.Handler != nil {
 			return config.Patrols.Handler.Enabled
 		}
+		return false
 	}
 	return true // Default: enabled
 }
