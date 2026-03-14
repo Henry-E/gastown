@@ -32,7 +32,7 @@ whether the other layers work.
 
 ```bash
 DOLT_DATA_DIR="$HOME/gt/.dolt-data"
-PROD_DBS=("hq" "bd" "gt")
+PROD_DBS=("hq" "gt")
 JSONL_EXPORT_DIR="$HOME/gt/.dolt-archive/jsonl"
 DOLT_HOST="127.0.0.1"
 DOLT_PORT=3307
@@ -260,7 +260,7 @@ if [ "$EXPORT_FAILED" -gt 0 ] || [ "$DOLT_PUSH_FAILED" -gt 0 ] || [ "$VERIFY_FAI
   RESULT="warning"
 fi
 
-bd create "$SUMMARY" -t chore --ephemeral \
+cd "$HOME/gt" && bd create "$SUMMARY" -t chore --ephemeral \
   -l type:plugin-run,plugin:dolt-archive,result:$RESULT \
   -d "$SUMMARY" --silent 2>/dev/null || true
 
