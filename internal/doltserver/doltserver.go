@@ -485,20 +485,7 @@ func IsRunning(townRoot string) (bool, int, error) {
 					// Verify it's actually serving on the expected port.
 					// More reliable than ps string matching (ZFC fix: gt-utuk).
 					if isDoltServerOnPort(config.Port) {
-						// Verify data-dir to avoid claiming another town's Dolt.
-						serverDataDir := getServerDataDir(townRoot, pid)
-						ours := serverDataDir == "" || serverDataDir == config.DataDir
-						if ours {
-							// Cross-check process args as tiebreaker against PID reuse:
-							// if the OS recycled this PID for a different town's dolt
-							// after the original stopped, its --data-dir flag will differ.
-							if actualDir := getDoltDataDirFromProcess(pid); actualDir != "" {
-								expected, _ := filepath.Abs(config.DataDir)
-								actual, _ := filepath.Abs(actualDir)
-								ours = actual == expected
-							}
-						}
-						if ours {
+						if doltProcessMatchesTown(townRoot, pid, config) {
 							return true, pid, nil
 						}
 						// Port served by a different town's Dolt — fall through to stale cleanup
@@ -512,23 +499,9 @@ func IsRunning(townRoot string) (bool, int, error) {
 
 	// No valid PID file - check if port is in use by dolt anyway.
 	// This catches externally-started dolt servers.
-	// Verify data-dir from state file matches this town to avoid claiming another town's Dolt.
 	pid := findDoltServerOnPort(config.Port)
-	if pid > 0 {
-		serverDataDir := getServerDataDir(townRoot, pid)
-		if serverDataDir == "" || serverDataDir == config.DataDir {
-			// Cross-check process args to guard against PID reuse.
-			actualDir := getDoltDataDirFromProcess(pid)
-			if actualDir == "" {
-				return true, pid, nil
-			}
-			expected, _ := filepath.Abs(config.DataDir)
-			actual, _ := filepath.Abs(actualDir)
-			if actual == expected {
-				return true, pid, nil
-			}
-		}
-		// Port is used by a different town's Dolt — not ours
+	if pid > 0 && doltProcessMatchesTown(townRoot, pid, config) {
+		return true, pid, nil
 	}
 
 	// Last resort: TCP reachability check. This handles Docker containers
@@ -684,11 +657,10 @@ func CheckPortConflict(townRoot string) (int, string) {
 	if pid <= 0 {
 		return 0, ""
 	}
-	dataDir := getServerDataDir(townRoot, pid)
-	if dataDir == "" || dataDir == cfg.DataDir {
-		return 0, "" // It's ours or unknown
+	if doltProcessMatchesTown(townRoot, pid, cfg) {
+		return 0, ""
 	}
-	return pid, dataDir
+	return pid, doltProcessOwnerPath(townRoot, pid)
 }
 
 // findDoltServerOnPort finds a process listening on the given port.
@@ -809,6 +781,65 @@ func getServerDataDir(townRoot string, pid int) string {
 	return ""
 }
 
+func getDoltFlagFromArgs(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+		prefix := flag + "="
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix)
+		}
+	}
+	return ""
+}
+
+func getProcessArgs(pid int) []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(strings.TrimSpace(string(out)))
+}
+
+func getProcessCWD(pid int) string {
+	switch runtime.GOOS {
+	case "linux":
+		cwd, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "cwd"))
+		if err == nil {
+			return cwd
+		}
+	case "darwin":
+		cmd := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn")
+		out, err := cmd.Output()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if strings.HasPrefix(line, "n") {
+					return strings.TrimPrefix(line, "n")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func resolveProcessPath(pid int, path string) string {
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	if cwd := getProcessCWD(pid); cwd != "" {
+		return filepath.Clean(filepath.Join(cwd, path))
+	}
+	return filepath.Clean(path)
+}
+
 // getDoltDataDirFromProcess reads the --data-dir flag value from the running
 // process's command-line arguments. This is structural (reading a well-defined
 // CLI flag), not heuristic string matching. Used as a tiebreaker when the
@@ -817,25 +848,51 @@ func getServerDataDir(townRoot string, pid int) string {
 // Supported on macOS and Linux via POSIX ps. Returns empty string on Windows
 // (not supported) or on any error.
 func getDoltDataDirFromProcess(pid int) string {
-	if runtime.GOOS == "windows" {
-		return "" // ps not available; caller falls back to trusting state file
+	return resolveProcessPath(pid, getDoltFlagFromArgs(getProcessArgs(pid), "--data-dir"))
+}
+
+// getDoltConfigPathFromProcess reads the --config flag value from the running
+// process's command-line arguments. Gas Town and beads both launch Dolt via
+// --config, so this is the ownership signal when --data-dir is absent.
+func getDoltConfigPathFromProcess(pid int) string {
+	return resolveProcessPath(pid, getDoltFlagFromArgs(getProcessArgs(pid), "--config"))
+}
+
+func doltProcessMatchesTownPaths(expectedDataDir, stateDataDir, actualDataDir, actualConfigPath string) bool {
+	expectedDir, _ := filepath.Abs(expectedDataDir)
+	if stateDataDir != "" {
+		actualDir, _ := filepath.Abs(stateDataDir)
+		return actualDir == expectedDir
 	}
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "args=")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
+	if actualDataDir != "" {
+		actualDir, _ := filepath.Abs(actualDataDir)
+		return actualDir == expectedDir
 	}
-	args := strings.Fields(strings.TrimSpace(string(out)))
-	for i, arg := range args {
-		if arg == "--data-dir" && i+1 < len(args) {
-			return args[i+1]
-		}
-		// Handle --data-dir=value form
-		if strings.HasPrefix(arg, "--data-dir=") {
-			return strings.TrimPrefix(arg, "--data-dir=")
-		}
+	if actualConfigPath != "" {
+		expectedConfig, _ := filepath.Abs(filepath.Join(expectedDir, "config.yaml"))
+		actualConfig, _ := filepath.Abs(actualConfigPath)
+		return actualConfig == expectedConfig
 	}
-	return ""
+	return false
+}
+
+func doltProcessMatchesTown(townRoot string, pid int, config *Config) bool {
+	return doltProcessMatchesTownPaths(
+		config.DataDir,
+		getServerDataDir(townRoot, pid),
+		getDoltDataDirFromProcess(pid),
+		getDoltConfigPathFromProcess(pid),
+	)
+}
+
+func doltProcessOwnerPath(townRoot string, pid int) string {
+	if stateDataDir := getServerDataDir(townRoot, pid); stateDataDir != "" {
+		return stateDataDir
+	}
+	if actualDir := getDoltDataDirFromProcess(pid); actualDir != "" {
+		return actualDir
+	}
+	return getDoltConfigPathFromProcess(pid)
 }
 
 // VerifyServerDataDir checks whether the running Dolt server is serving the
@@ -860,6 +917,22 @@ func VerifyServerDataDir(townRoot string) (bool, error) {
 			return false, fmt.Errorf("server data-dir mismatch: expected %s, got %s (PID %d)", expectedDir, actualDir, pid)
 		}
 		return true, nil
+	}
+
+	// Check process cwd — if the server is running from a different directory
+	// than .dolt-data/, it's an imposter (e.g., bd/dolt auto-started from a
+	// rig's .beads/dolt/ directory). This catches imposters even when the
+	// state file is stale and the served databases overlap. (GH #2772)
+	if pid > 0 {
+		cwd := getProcessCWD(pid)
+		if cwd != "" {
+			expectedDataDir, _ := filepath.Abs(config.DataDir)
+			// The server's cwd should be the data dir or its parent (town root).
+			absCwd, _ := filepath.Abs(cwd)
+			if absCwd != expectedDataDir && absCwd != filepath.Dir(expectedDataDir) {
+				return false, fmt.Errorf("server cwd mismatch: expected %s or %s, got %s (PID %d)", expectedDataDir, filepath.Dir(expectedDataDir), absCwd, pid)
+			}
+		}
 	}
 
 	// No state file or PID mismatch — check served databases
@@ -903,31 +976,14 @@ func KillImposters(townRoot string) error {
 		return nil // No server on port
 	}
 
-	// Check state file for data-dir instead of ps string matching (ZFC fix: gt-utuk).
-	stateDataDir := getServerDataDir(townRoot, pid)
-	expectedDir, _ := filepath.Abs(config.DataDir)
-
-	isImposter := false
-	if stateDataDir == "" {
-		// No state record for this PID — fall back to database verification.
-		// Query the server to check if it serves our databases.
-		legitimate, err := VerifyServerDataDir(townRoot)
-		if err != nil || !legitimate {
-			isImposter = true
-		}
-	} else {
-		actualDir, _ := filepath.Abs(stateDataDir)
-		if expectedDir != actualDir {
-			isImposter = true
-		}
-	}
-
-	if !isImposter {
+	if doltProcessMatchesTown(townRoot, pid, config) {
 		return nil
 	}
 
+	owner := doltProcessOwnerPath(townRoot, pid)
+	expectedDir, _ := filepath.Abs(config.DataDir)
 	fmt.Fprintf(os.Stderr, "Killing imposter dolt sql-server (PID %d, data-dir: %q, expected: %s)\n",
-		pid, stateDataDir, expectedDir)
+		pid, owner, expectedDir)
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
