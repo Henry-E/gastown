@@ -260,7 +260,7 @@ if [ "$EXPORT_FAILED" -gt 0 ] || [ "$DOLT_PUSH_FAILED" -gt 0 ] || [ "$VERIFY_FAI
   RESULT="warning"
 fi
 
-cd "$HOME/gt" && bd create "$SUMMARY" -t chore --ephemeral \
+bd create "$SUMMARY" -t chore --ephemeral \
   -l type:plugin-run,plugin:dolt-archive,result:$RESULT \
   -d "$SUMMARY" --silent 2>/dev/null || true
 

@@ -110,13 +110,13 @@ func (m *SessionManager) Start(dogName string, opts SessionStartOptions) error {
 			workInfo = fmt.Sprintf(" Work assigned: %s.", opts.WorkDesc)
 		}
 	}
-	instructions := fmt.Sprintf("I am Dog %s.%s IMPORTANT: If your hook is empty and you have no mail, WAIT — the dispatcher is still setting up your assignment. Do NOT search for work, scan directories, or take autonomous action. Check hook (`"+cli.Name()+" hook`) and mail (`"+cli.Name()+" mail inbox`). If neither has work, wait 10 seconds and re-check. Execute only assigned work. When done, run `"+cli.Name()+" dog done` — this clears your work and auto-terminates the session.", dogName, workInfo)
+	instructions := fmt.Sprintf("I am Dog %s.%s IMPORTANT: If your hook is empty and you have no mail, WAIT — the dispatcher is still setting up your assignment. Do NOT search for work, scan directories, or take autonomous action. Check hook (`"+cli.Name()+" hook`) and mail (`"+cli.Name()+" mail inbox`). If neither has work, wait 10 seconds and re-check. Execute only assigned work. When done, run `"+cli.Name()+" dog done "+dogName+"` — this clears your work and auto-terminates the session.", dogName, workInfo)
 
 	// Use unified session lifecycle.
 	theme := tmux.DogTheme()
 	_, err = session.StartSession(m.tmux, session.SessionConfig{
 		SessionID: sessionID,
-		WorkDir:   kennelDir,
+		WorkDir:   m.townRoot,
 		Role:      "dog",
 		TownRoot:  m.townRoot,
 		AgentName: dogName,
