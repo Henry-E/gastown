@@ -11,18 +11,9 @@ set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 
-TOWN_ROOT="${GT_TOWN_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
-DOLT_DATA_DIR="${DOLT_DATA_DIR:-$TOWN_ROOT/.dolt-data}"
-BACKUP_DIR="${DOLT_BACKUP_DIR:-$TOWN_ROOT/.dolt-backup}"
-# Auto-discover databases from data dir if not overridden
-if [[ -z "${DOLT_DATABASES:-}" ]]; then
-  PROD_DBS=()
-  while IFS= read -r _db; do
-    [[ -n "$_db" ]] && PROD_DBS+=("$_db")
-  done < <(find "$DOLT_DATA_DIR" -maxdepth 1 -mindepth 1 -type d -not -name '.*' 2>/dev/null | xargs -I{} basename {} | sort)
-else
-  IFS=',' read -ra PROD_DBS <<< "$DOLT_DATABASES"
-fi
+DOLT_DATA_DIR="${DOLT_DATA_DIR:-$HOME/gt/.dolt-data}"
+BACKUP_DIR="${DOLT_BACKUP_DIR:-$HOME/gt/.dolt-backup}"
+PROD_DBS=("hq" "ne" "st" "commercialhub")
 BACKUP_TIMEOUT=60
 
 # --- Argument parsing ---------------------------------------------------------
