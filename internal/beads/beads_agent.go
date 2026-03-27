@@ -426,10 +426,18 @@ func (b *Beads) ResetAgentBeadForReuse(id, reason string) error {
 // then syncs the description's agent_state field to match (gt-ulom).
 func (b *Beads) UpdateAgentState(id string, state string) (retErr error) {
 	defer func() { telemetry.RecordAgentStateChange(context.Background(), id, state, nil, retErr) }()
-	// Update agent state using bd set-state command (bd 0.62.0+).
-	// Use runWithRouting so bd can resolve cross-prefix agent beads (e.g., wa-*
-	// agent beads from hq context) via routes.jsonl instead of BEADS_DIR.
-	_, err := b.runWithRouting("set-state", id, "agent_state="+state)
+	// Resolve the concrete target DB first, then run set-state there.
+	// Using runWithRouting here strips BEADS_DIR, which can send set-state to a
+	// different database than CreateAgentBead/Update when the wrapper already has
+	// an explicit target beads dir. That creates "missing parent row" failures in
+	// Dolt when the agent bead exists in one DB but set-state hits another.
+	targetDir := ResolveRoutingTarget(b.getTownRoot(), id, b.getResolvedBeadsDir())
+	target := b
+	if targetDir != b.getResolvedBeadsDir() {
+		target = NewWithBeadsDir(filepath.Dir(targetDir), targetDir)
+	}
+
+	_, err := target.run("set-state", id, "agent_state="+state)
 	if err != nil {
 		return fmt.Errorf("updating agent state: %w", err)
 	}
@@ -438,7 +446,7 @@ func (b *Beads) UpdateAgentState(id string, state string) (retErr error) {
 	// Without this, the description stays stale (e.g., "spawning" after the
 	// column transitions to "working"), causing bd show and dashboards to
 	// display incorrect state after idle polecat reuse via gt sling.
-	_ = b.UpdateAgentDescriptionFields(id, AgentFieldUpdates{AgentState: &state})
+	_ = target.UpdateAgentDescriptionFields(id, AgentFieldUpdates{AgentState: &state})
 
 	return nil
 }
