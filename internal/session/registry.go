@@ -28,6 +28,12 @@ type PrefixRegistry struct {
 	rigToPrefix map[string]string // "gastown" → "gt"
 }
 
+type socketSessionLister interface {
+	ListSessions() ([]string, error)
+}
+
+var socketListerForTest func(socket string) socketSessionLister
+
 // NewPrefixRegistry creates an empty prefix registry.
 func NewPrefixRegistry() *PrefixRegistry {
 	return &PrefixRegistry{
@@ -162,12 +168,119 @@ func resolveTmuxSocketName(townRoot string) string {
 			return ""
 		case config.TmuxSocketModeAuto:
 			return townSocketName(townRoot)
+		case "":
+			mode, _, migErr := EnsureLegacyTmuxSocketMode(townRoot)
+			if migErr != nil {
+				style.PrintWarning("could not infer tmux.socket_mode for legacy town: %v; defaulting to unnamed tmux socket", migErr)
+				return ""
+			}
+			if mode == config.TmuxSocketModeAuto {
+				return townSocketName(townRoot)
+			}
+			return ""
 		}
 	}
 
 	// Backward compatibility: towns without the new setting keep the current
 	// per-town socket behavior.
 	return townSocketName(townRoot)
+}
+
+func newSocketSessionLister(socket string) socketSessionLister {
+	if socketListerForTest != nil {
+		return socketListerForTest(socket)
+	}
+	return tmux.NewTmuxWithSocket(socket)
+}
+
+func gasTownSessionsOnSocket(socket string) ([]string, error) {
+	if socket == "" {
+		return nil, nil
+	}
+
+	sessions, err := newSocketSessionLister(socket).ListSessions()
+	if err != nil {
+		if errors.Is(err, tmux.ErrNoServer) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	filtered := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		if strings.HasPrefix(sess, HQPrefix) || HasKnownPrefix(sess) {
+			filtered = append(filtered, sess)
+		}
+	}
+	return filtered, nil
+}
+
+func inferLegacyTmuxSocketMode(townRoot string) (string, error) {
+	defaultSessions, err := gasTownSessionsOnSocket("default")
+	if err != nil {
+		return "", fmt.Errorf("inspect default tmux socket: %w", err)
+	}
+
+	hashedSocket := TownSocketName(townRoot)
+	legacySocket := LegacySocketName(townRoot)
+	namedSessions := make(map[string][]string)
+	for _, socket := range []string{hashedSocket, legacySocket} {
+		if socket == "" || socket == "default" {
+			continue
+		}
+		if _, seen := namedSessions[socket]; seen {
+			continue
+		}
+		sessions, err := gasTownSessionsOnSocket(socket)
+		if err != nil {
+			return "", fmt.Errorf("inspect tmux socket %q: %w", socket, err)
+		}
+		namedSessions[socket] = sessions
+	}
+
+	var namedActive []string
+	for socket, sessions := range namedSessions {
+		if len(sessions) > 0 {
+			namedActive = append(namedActive, socket)
+		}
+	}
+
+	switch {
+	case len(namedActive) > 1:
+		return "", fmt.Errorf("found Gas Town sessions on multiple named sockets (%s)", strings.Join(namedActive, ", "))
+	case len(defaultSessions) > 0 && len(namedActive) > 0:
+		return "", fmt.Errorf("found Gas Town sessions on both %q and %q", "default", namedActive[0])
+	case len(defaultSessions) > 0:
+		return config.TmuxSocketModeDefault, nil
+	case len(namedActive) == 1:
+		return config.TmuxSocketModeAuto, nil
+	default:
+		return config.TmuxSocketModeDefault, nil
+	}
+}
+
+// EnsureLegacyTmuxSocketMode persists a tmux.socket_mode value for legacy towns
+// whose settings file predates the tmux socket mode field.
+func EnsureLegacyTmuxSocketMode(townRoot string) (mode string, changed bool, err error) {
+	settingsPath := config.TownSettingsPath(townRoot)
+	settings, err := config.LoadOrCreateTownSettings(settingsPath)
+	if err != nil {
+		return "", false, err
+	}
+	if settings.TmuxSocketMode != "" {
+		return settings.TmuxSocketMode, false, nil
+	}
+
+	mode, err = inferLegacyTmuxSocketMode(townRoot)
+	if err != nil {
+		return "", false, err
+	}
+
+	settings.TmuxSocketMode = mode
+	if err := config.SaveTownSettings(settingsPath, settings); err != nil {
+		return "", false, err
+	}
+	return mode, true, nil
 }
 
 // sanitizeRe matches non-alphanumeric, non-hyphen characters.
