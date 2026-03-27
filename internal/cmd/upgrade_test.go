@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/session"
 )
 
 func TestGenerateCLAUDEMD(t *testing.T) {
@@ -25,7 +28,6 @@ func TestGenerateCLAUDEMD(t *testing.T) {
 		t.Error("CLAUDE.md should reference GT_ROLE environment variable")
 	}
 }
-
 
 func TestUpgradeCLAUDEMD_CreatesMissingFile(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -183,6 +185,160 @@ func TestUpgradeBeadsExempt(t *testing.T) {
 func TestUpgradeBranchCheckExempt(t *testing.T) {
 	if !branchCheckExemptCommands["upgrade"] {
 		t.Error("upgrade should be in branchCheckExemptCommands")
+	}
+}
+
+type fakeUpgradeSocketLister struct {
+	sessions []string
+	err      error
+}
+
+func (f fakeUpgradeSocketLister) ListSessions() ([]string, error) {
+	return f.sessions, f.err
+}
+
+func TestUpgradeTmuxSocketMode_DefaultSocketLegacyTown(t *testing.T) {
+	tmpDir := t.TempDir()
+	upgradeDryRun = false
+	upgradeVerbose = false
+
+	upgradeSocketListerForTest = func(socket string) upgradeSocketSessionLister {
+		switch socket {
+		case "default":
+			return fakeUpgradeSocketLister{sessions: []string{"hq-mayor"}}
+		case session.TownSocketName(tmpDir), session.LegacySocketName(tmpDir):
+			return fakeUpgradeSocketLister{}
+		default:
+			return fakeUpgradeSocketLister{}
+		}
+	}
+	t.Cleanup(func() {
+		upgradeSocketListerForTest = nil
+		upgradeDryRun = false
+	})
+
+	result, err := upgradeTmuxSocketMode(tmpDir)
+	if err != nil {
+		t.Fatalf("upgradeTmuxSocketMode() error = %v", err)
+	}
+	if result.changed != 1 {
+		t.Fatalf("result.changed = %d, want 1", result.changed)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(tmpDir))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeDefault {
+		t.Fatalf("TmuxSocketMode = %q, want %q", settings.TmuxSocketMode, config.TmuxSocketModeDefault)
+	}
+}
+
+func TestUpgradeTmuxSocketMode_NamedSocketLegacyTown(t *testing.T) {
+	tmpDir := t.TempDir()
+	upgradeDryRun = false
+	upgradeVerbose = false
+	hashedSocket := session.TownSocketName(tmpDir)
+
+	upgradeSocketListerForTest = func(socket string) upgradeSocketSessionLister {
+		switch socket {
+		case "default":
+			return fakeUpgradeSocketLister{}
+		case hashedSocket:
+			return fakeUpgradeSocketLister{sessions: []string{"hq-mayor"}}
+		case session.LegacySocketName(tmpDir):
+			return fakeUpgradeSocketLister{}
+		default:
+			return fakeUpgradeSocketLister{}
+		}
+	}
+	t.Cleanup(func() {
+		upgradeSocketListerForTest = nil
+		upgradeDryRun = false
+	})
+
+	result, err := upgradeTmuxSocketMode(tmpDir)
+	if err != nil {
+		t.Fatalf("upgradeTmuxSocketMode() error = %v", err)
+	}
+	if result.changed != 1 {
+		t.Fatalf("result.changed = %d, want 1", result.changed)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(tmpDir))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeAuto {
+		t.Fatalf("TmuxSocketMode = %q, want %q", settings.TmuxSocketMode, config.TmuxSocketModeAuto)
+	}
+}
+
+func TestUpgradeTmuxSocketMode_ConflictBetweenDefaultAndNamed(t *testing.T) {
+	tmpDir := t.TempDir()
+	upgradeDryRun = false
+	upgradeVerbose = false
+	hashedSocket := session.TownSocketName(tmpDir)
+
+	upgradeSocketListerForTest = func(socket string) upgradeSocketSessionLister {
+		switch socket {
+		case "default", hashedSocket:
+			return fakeUpgradeSocketLister{sessions: []string{"hq-mayor"}}
+		case session.LegacySocketName(tmpDir):
+			return fakeUpgradeSocketLister{}
+		default:
+			return fakeUpgradeSocketLister{}
+		}
+	}
+	t.Cleanup(func() {
+		upgradeSocketListerForTest = nil
+		upgradeDryRun = false
+	})
+
+	result, err := upgradeTmuxSocketMode(tmpDir)
+	if err == nil {
+		t.Fatal("upgradeTmuxSocketMode() error = nil, want conflict")
+	}
+	if result.changed != 0 {
+		t.Fatalf("result.changed = %d, want 0", result.changed)
+	}
+
+	settings, loadErr := config.LoadOrCreateTownSettings(config.TownSettingsPath(tmpDir))
+	if loadErr != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", loadErr)
+	}
+	if settings.TmuxSocketMode != "" {
+		t.Fatalf("TmuxSocketMode = %q, want empty after conflict", settings.TmuxSocketMode)
+	}
+}
+
+func TestUpgradeTmuxSocketMode_NoSessionsDefaultsLegacyTownToDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	upgradeDryRun = false
+	upgradeVerbose = false
+
+	upgradeSocketListerForTest = func(socket string) upgradeSocketSessionLister {
+		return fakeUpgradeSocketLister{}
+	}
+	t.Cleanup(func() {
+		upgradeSocketListerForTest = nil
+		upgradeDryRun = false
+	})
+
+	result, err := upgradeTmuxSocketMode(tmpDir)
+	if err != nil {
+		t.Fatalf("upgradeTmuxSocketMode() error = %v", err)
+	}
+	if result.changed != 1 {
+		t.Fatalf("result.changed = %d, want 1", result.changed)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(tmpDir))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeDefault {
+		t.Fatalf("TmuxSocketMode = %q, want %q", settings.TmuxSocketMode, config.TmuxSocketModeDefault)
 	}
 }
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 	"github.com/steveyegge/gastown/internal/doctor"
 	"github.com/steveyegge/gastown/internal/formula"
 	"github.com/steveyegge/gastown/internal/hooks"
+	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -21,6 +24,12 @@ var (
 	upgradeVerbose bool
 	upgradeNoStart bool
 )
+
+type upgradeSocketSessionLister interface {
+	ListSessions() ([]string, error)
+}
+
+var upgradeSocketListerForTest func(socket string) upgradeSocketSessionLister
 
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
@@ -77,23 +86,35 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 
 	var results []upgradeResult
 
-	// Step 1: Run doctor --fix for structural checks
+	// Step 1: Persist tmux socket mode for legacy towns before any tmux-based checks.
+	r0, err := upgradeTmuxSocketMode(townRoot)
+	if err != nil {
+		return err
+	}
+	results = append(results, r0)
+	if r0.changed > 0 && !upgradeDryRun {
+		if err := session.InitRegistry(townRoot); err != nil {
+			return fmt.Errorf("reload registry after tmux socket migration: %w", err)
+		}
+	}
+
+	// Step 2: Run doctor --fix for structural checks
 	r1 := upgradeDoctor(townRoot)
 	results = append(results, r1)
 
-	// Step 2: Sync CLAUDE.md from embedded template
+	// Step 3: Sync CLAUDE.md from embedded template
 	r2 := upgradeCLAUDEMD(townRoot)
 	results = append(results, r2)
 
-	// Step 3: Ensure daemon.json lifecycle defaults
+	// Step 4: Ensure daemon.json lifecycle defaults
 	r3 := upgradeDaemonConfig(townRoot)
 	results = append(results, r3)
 
-	// Step 4: Sync hooks registry to settings.json
+	// Step 5: Sync hooks registry to settings.json
 	r4 := upgradeHooksSync(townRoot)
 	results = append(results, r4)
 
-	// Step 5: Update formulas from embedded copies
+	// Step 6: Update formulas from embedded copies
 	r5 := upgradeFormulas(townRoot)
 	results = append(results, r5)
 
@@ -103,11 +124,127 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func newUpgradeSocketLister(socket string) upgradeSocketSessionLister {
+	if upgradeSocketListerForTest != nil {
+		return upgradeSocketListerForTest(socket)
+	}
+	return tmux.NewTmuxWithSocket(socket)
+}
+
+func gasTownSessionsOnSocket(socket string) ([]string, error) {
+	lister := newUpgradeSocketLister(socket)
+	sessions, err := lister.ListSessions()
+	if err != nil {
+		if errors.Is(err, tmux.ErrNoServer) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	filtered := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		if strings.HasPrefix(sess, session.HQPrefix) || session.HasKnownPrefix(sess) {
+			filtered = append(filtered, sess)
+		}
+	}
+	return filtered, nil
+}
+
+func inspectGasTownSocket(socket string) ([]string, error) {
+	if socket == "" {
+		return nil, nil
+	}
+	return gasTownSessionsOnSocket(socket)
+}
+
+func upgradeTmuxSocketMode(townRoot string) (upgradeResult, error) {
+	result := upgradeResult{step: "Tmux socket mode"}
+
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("1."), "Migrating tmux socket mode...")
+
+	settingsPath := config.TownSettingsPath(townRoot)
+	settings, err := config.LoadOrCreateTownSettings(settingsPath)
+	if err != nil {
+		return result, fmt.Errorf("load town settings: %w", err)
+	}
+
+	if settings.TmuxSocketMode != "" {
+		fmt.Printf("     %s tmux.socket_mode %s\n", style.SuccessPrefix, style.Dim.Render("already set to "+settings.TmuxSocketMode))
+		return result, nil
+	}
+
+	defaultSessions, err := gasTownSessionsOnSocket("default")
+	if err != nil {
+		return result, fmt.Errorf("inspect default tmux socket: %w", err)
+	}
+
+	hashedSocket := session.TownSocketName(townRoot)
+	legacySocket := session.LegacySocketName(townRoot)
+
+	namedSessions := make(map[string][]string)
+	for _, socket := range []string{hashedSocket, legacySocket} {
+		if socket == "" || socket == "default" {
+			continue
+		}
+		if _, seen := namedSessions[socket]; seen {
+			continue
+		}
+		sessions, err := inspectGasTownSocket(socket)
+		if err != nil {
+			return result, fmt.Errorf("inspect tmux socket %q: %w", socket, err)
+		}
+		namedSessions[socket] = sessions
+	}
+
+	var namedActive []string
+	for socket, sessions := range namedSessions {
+		if len(sessions) > 0 {
+			namedActive = append(namedActive, socket)
+		}
+	}
+
+	var mode string
+	switch {
+	case len(namedActive) > 1:
+		return result, fmt.Errorf(
+			"tmux socket migration conflict: found Gas Town sessions on multiple named sockets (%s); set tmux.socket_mode manually",
+			strings.Join(namedActive, ", "),
+		)
+	case len(defaultSessions) > 0 && len(namedActive) > 0:
+		return result, fmt.Errorf(
+			"tmux socket migration conflict: found Gas Town sessions on both %q and %q; resolve split-brain first or set tmux.socket_mode manually",
+			"default", namedActive[0],
+		)
+	case len(defaultSessions) > 0:
+		mode = config.TmuxSocketModeDefault
+	case len(namedActive) == 1:
+		mode = config.TmuxSocketModeAuto
+	default:
+		mode = config.TmuxSocketModeDefault
+		result.details = append(result.details, "no existing Gas Town sessions found; defaulting legacy town to tmux.socket_mode=default")
+	}
+
+	if upgradeDryRun {
+		fmt.Printf("     %s tmux.socket_mode %s\n", style.WarningPrefix, style.Dim.Render("would set to "+mode))
+		result.changed = 1
+		return result, nil
+	}
+
+	settings.TmuxSocketMode = mode
+	if err := config.SaveTownSettings(settingsPath, settings); err != nil {
+		return result, fmt.Errorf("save town settings: %w", err)
+	}
+
+	fmt.Printf("     %s tmux.socket_mode %s\n", style.SuccessPrefix, style.Dim.Render("set to "+mode))
+	result.changed = 1
+	return result, nil
+}
+
 // upgradeDoctor runs doctor --fix and returns the result.
 func upgradeDoctor(townRoot string) upgradeResult {
 	result := upgradeResult{step: "Structural checks"}
 
-	fmt.Printf("\n  %s %s\n", style.Bold.Render("1."), "Running structural checks (doctor --fix)...")
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("2."), "Running structural checks (doctor --fix)...")
 
 	ctx := &doctor.CheckContext{
 		TownRoot: townRoot,
@@ -181,7 +318,7 @@ func upgradeDoctor(townRoot string) upgradeResult {
 func upgradeCLAUDEMD(townRoot string) upgradeResult {
 	result := upgradeResult{step: "CLAUDE.md sync"}
 
-	fmt.Printf("\n  %s %s\n", style.Bold.Render("2."), "Syncing CLAUDE.md from template...")
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("3."), "Syncing CLAUDE.md from template...")
 
 	expected := generateCLAUDEMD()
 	claudePath := filepath.Join(townRoot, "CLAUDE.md")
@@ -254,7 +391,7 @@ Your role is set by the GT_ROLE environment variable and injected by ` + "`" + c
 func upgradeDaemonConfig(townRoot string) upgradeResult {
 	result := upgradeResult{step: "Daemon config"}
 
-	fmt.Printf("\n  %s %s\n", style.Bold.Render("3."), "Ensuring daemon.json lifecycle defaults...")
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("4."), "Ensuring daemon.json lifecycle defaults...")
 
 	daemonPath := config.DaemonPatrolConfigPath(townRoot)
 
@@ -299,7 +436,7 @@ func upgradeDaemonConfig(townRoot string) upgradeResult {
 func upgradeHooksSync(townRoot string) upgradeResult {
 	result := upgradeResult{step: "Hooks sync"}
 
-	fmt.Printf("\n  %s %s\n", style.Bold.Render("4."), "Syncing hooks to settings.json...")
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("5."), "Syncing hooks to settings.json...")
 
 	targets, err := hooks.DiscoverTargets(townRoot)
 	if err != nil {
@@ -389,7 +526,7 @@ func upgradeHooksSync(townRoot string) upgradeResult {
 func upgradeFormulas(townRoot string) upgradeResult {
 	result := upgradeResult{step: "Formulas"}
 
-	fmt.Printf("\n  %s %s\n", style.Bold.Render("5."), "Updating formulas from embedded copies...")
+	fmt.Printf("\n  %s %s\n", style.Bold.Render("6."), "Updating formulas from embedded copies...")
 
 	if upgradeDryRun {
 		// In dry-run mode, just check health

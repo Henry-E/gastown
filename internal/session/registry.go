@@ -196,6 +196,13 @@ func townSocketName(townRoot string) string {
 	return base + "-" + suffix
 }
 
+// TownSocketName returns the canonical per-town tmux socket name derived from
+// the full town path. Exported for migration and doctor flows that need to
+// inspect both legacy and current socket conventions explicitly.
+func TownSocketName(townRoot string) string {
+	return townSocketName(townRoot)
+}
+
 // LegacySocketName returns the old-format socket name (basename only, no hash)
 // used before path-based socket derivation was added. Used by gt down to clean
 // up sessions orphaned on the old socket during migration.
