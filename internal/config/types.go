@@ -36,6 +36,13 @@ type MayorConfig struct {
 // CurrentTownSettingsVersion is the current schema version for TownSettings.
 const CurrentTownSettingsVersion = 1
 
+const (
+	// TmuxSocketModeDefault uses tmux's real default socket (no -L flag).
+	TmuxSocketModeDefault = "default"
+	// TmuxSocketModeAuto derives a per-town socket name from the town path.
+	TmuxSocketModeAuto = "auto"
+)
+
 // TownSettings represents town-level behavioral configuration (settings/config.json).
 // This contains agent configuration that applies to all rigs unless overridden.
 type TownSettings struct {
@@ -53,6 +60,12 @@ type TownSettings struct {
 	// or a custom agent name defined in settings/agents.json.
 	// Default: "claude"
 	DefaultAgent string `json:"default_agent,omitempty"`
+
+	// TmuxSocketMode controls which tmux socket Gas Town uses when GT_TMUX_SOCKET
+	// is unset. "default" uses tmux's real default socket (empty name). "auto"
+	// derives a per-town named socket from the town path. Empty preserves legacy
+	// behavior for existing towns.
+	TmuxSocketMode string `json:"tmux_socket_mode,omitempty"`
 
 	// Agents defines custom agent configurations or overrides.
 	// Keys are agent names that can be referenced by DefaultAgent or rig settings.

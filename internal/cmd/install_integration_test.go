@@ -77,6 +77,50 @@ func TestInstallCreatesCorrectStructure(t *testing.T) {
 	// Verify deacon settings exist in deacon/.claude/
 	deaconSettingsPath := filepath.Join(hqPath, "deacon", ".claude", "settings.json")
 	assertFileExists(t, deaconSettingsPath, "deacon/.claude/settings.json")
+
+	settingsPath := filepath.Join(hqPath, "settings", "config.json")
+	assertFileExists(t, settingsPath, "settings/config.json")
+	settings, err := config.LoadOrCreateTownSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to load settings/config.json: %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeDefault {
+		t.Errorf("tmux_socket_mode = %q, want %q for first install", settings.TmuxSocketMode, config.TmuxSocketModeDefault)
+	}
+}
+
+func TestInstallSecondTownDefaultsToAutoTmuxSocketMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	firstHQ := filepath.Join(tmpDir, "first-hq")
+	secondHQ := filepath.Join(tmpDir, "second-hq")
+
+	gtBinary := buildGT(t)
+	env := append(os.Environ(), "HOME="+tmpDir)
+	configureGitIdentity(t, env)
+
+	_ = exec.Command("pkill", "-f", "dolt sql-server").Run()
+	t.Cleanup(func() { _ = exec.Command("pkill", "-f", "dolt sql-server").Run() })
+
+	firstCmd := exec.Command(gtBinary, "install", firstHQ, "--name", "first-town")
+	firstCmd.Env = env
+	if output, err := firstCmd.CombinedOutput(); err != nil {
+		t.Fatalf("first gt install failed: %v\nOutput: %s", err, output)
+	}
+
+	secondCmd := exec.Command(gtBinary, "install", secondHQ, "--name", "second-town")
+	secondCmd.Env = env
+	if output, err := secondCmd.CombinedOutput(); err != nil {
+		t.Fatalf("second gt install failed: %v\nOutput: %s", err, output)
+	}
+
+	settingsPath := filepath.Join(secondHQ, "settings", "config.json")
+	settings, err := config.LoadOrCreateTownSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to load second settings/config.json: %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeAuto {
+		t.Errorf("tmux_socket_mode = %q, want %q for second install", settings.TmuxSocketMode, config.TmuxSocketModeAuto)
+	}
 }
 
 // TestInstallBeadsHasCorrectPrefix validates that beads is initialized

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/steveyegge/gastown/internal/util"
 	"github.com/google/uuid"
+	"github.com/steveyegge/gastown/internal/util"
 )
 
 // State represents the global Gas Town state.
@@ -122,6 +122,23 @@ func Enable(version string) error {
 
 	s.Enabled = true
 	s.Version = version
+	return Save(s)
+}
+
+// RecordInstall persists that Gas Town has been installed on this machine,
+// without changing the enabled/disabled state.
+func RecordInstall(version string) error {
+	s, err := Load()
+	if err != nil {
+		s = &State{
+			InstalledAt: time.Now(),
+			MachineID:   generateMachineID(),
+		}
+	}
+
+	if version != "" {
+		s.Version = version
+	}
 	return Save(s)
 }
 

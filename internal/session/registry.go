@@ -122,14 +122,7 @@ func SetDefaultRegistry(r *PrefixRegistry) {
 func InitRegistry(townRoot string) error {
 	var errs []error
 
-	// Determine the tmux socket name from GT_TMUX_SOCKET env var:
-	//   unset / "default" / "auto" → per-town socket derived from town directory path
-	//   any other value            → use that name as-is
-	socket := os.Getenv("GT_TMUX_SOCKET")
-	switch socket {
-	case "", "default", "auto":
-		socket = townSocketName(townRoot)
-	}
+	socket := resolveTmuxSocketName(townRoot)
 	tmux.SetDefaultSocket(socket)
 
 	r, err := BuildPrefixRegistryFromTown(townRoot)
@@ -146,6 +139,35 @@ func InitRegistry(townRoot string) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func resolveTmuxSocketName(townRoot string) string {
+	// Explicit environment override wins for tests and one-off operator use.
+	if socket, ok := os.LookupEnv("GT_TMUX_SOCKET"); ok {
+		switch socket {
+		case "", config.TmuxSocketModeDefault:
+			return ""
+		case config.TmuxSocketModeAuto:
+			return townSocketName(townRoot)
+		default:
+			return socket
+		}
+	}
+
+	// Persisted town setting controls the normal runtime default for new towns.
+	settingsPath := config.TownSettingsPath(townRoot)
+	if settings, err := config.LoadOrCreateTownSettings(settingsPath); err == nil {
+		switch settings.TmuxSocketMode {
+		case config.TmuxSocketModeDefault:
+			return ""
+		case config.TmuxSocketModeAuto:
+			return townSocketName(townRoot)
+		}
+	}
+
+	// Backward compatibility: towns without the new setting keep the current
+	// per-town socket behavior.
+	return townSocketName(townRoot)
 }
 
 // sanitizeRe matches non-alphanumeric, non-hyphen characters.

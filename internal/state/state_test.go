@@ -129,3 +129,27 @@ func TestGenerateMachineID(t *testing.T) {
 		t.Error("generateMachineID() should generate unique IDs")
 	}
 }
+
+func TestRecordInstallCreatesStateWithoutEnabling(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("XDG_STATE_HOME", tmpDir)
+	defer os.Unsetenv("XDG_STATE_HOME")
+
+	if err := RecordInstall("2.0.0"); err != nil {
+		t.Fatalf("RecordInstall() failed: %v", err)
+	}
+
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if s.Enabled {
+		t.Error("RecordInstall() should not enable Gas Town")
+	}
+	if s.Version != "2.0.0" {
+		t.Errorf("State.Version = %q, want %q", s.Version, "2.0.0")
+	}
+	if s.MachineID == "" {
+		t.Error("State.MachineID should not be empty")
+	}
+}

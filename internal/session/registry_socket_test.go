@@ -6,12 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
 // TestInitRegistry_SocketFromTownName verifies GT_TMUX_SOCKET socket selection:
-//   - unset / "default" / "auto" → per-town socket derived from town directory path
-//   - explicit value              → that value verbatim
+//   - unset + tmux_socket_mode=default → default tmux socket (empty name)
+//   - unset + tmux_socket_mode=auto    → per-town socket derived from town path
+//   - GT_TMUX_SOCKET override          → env wins
 func TestInitRegistry_SocketFromTownName(t *testing.T) {
 	origTMUX := os.Getenv("TMUX")
 	origSocket := tmux.GetDefaultSocket()
@@ -23,35 +25,41 @@ func TestInitRegistry_SocketFromTownName(t *testing.T) {
 	})
 
 	tests := []struct {
-		name        string
+		name         string
 		gtTmuxSocket string // GT_TMUX_SOCKET value ("" = unset)
-		tmuxEnv     string  // $TMUX value
-		townDir     string  // basename of the town root directory
+		socketMode   string
+		tmuxEnv      string // $TMUX value
+		townDir      string // basename of the town root directory
+		wantEmpty    bool
 	}{
 		{
-			name:        "unset → derived from town path",
-			gtTmuxSocket: "",
-			townDir:     "gt",
+			name:       "unset + default mode -> empty socket",
+			townDir:    "gt",
+			socketMode: config.TmuxSocketModeDefault,
+			wantEmpty:  true,
 		},
 		{
-			name:        "explicit default → derived from town path",
+			name:         "env default -> empty socket",
 			gtTmuxSocket: "default",
-			townDir:     "gt",
+			townDir:      "gt",
+			socketMode:   config.TmuxSocketModeAuto,
+			wantEmpty:    true,
 		},
 		{
-			name:        "auto → derived from town path",
+			name:         "env auto -> derived from town path",
 			gtTmuxSocket: "auto",
-			townDir:     "gt",
+			townDir:      "gt",
+			socketMode:   config.TmuxSocketModeDefault,
 		},
 		{
-			name:        "auto → sanitized town name with spaces",
-			gtTmuxSocket: "auto",
-			townDir:     "My Town",
+			name:       "unset + auto mode -> derived from town path",
+			townDir:    "My Town",
+			socketMode: config.TmuxSocketModeAuto,
 		},
 		{
-			name:        "auto → sanitized town name with caps",
-			gtTmuxSocket: "auto",
-			townDir:     "GasTown",
+			name:       "unset + auto mode with caps -> derived from town path",
+			townDir:    "GasTown",
+			socketMode: config.TmuxSocketModeAuto,
 		},
 	}
 
@@ -72,10 +80,14 @@ func TestInitRegistry_SocketFromTownName(t *testing.T) {
 
 			townRoot := filepath.Join(t.TempDir(), tt.townDir)
 			os.MkdirAll(townRoot, 0o755)
+			writeTownSettings(t, townRoot, tt.socketMode)
 			_ = InitRegistry(townRoot)
 
 			got := tmux.GetDefaultSocket()
 			want := townSocketName(townRoot)
+			if tt.wantEmpty {
+				want = ""
+			}
 			if got != want {
 				t.Errorf("after InitRegistry(%q) with GT_TMUX_SOCKET=%q:\n  socket = %q, want %q",
 					townRoot, tt.gtTmuxSocket, got, want)
@@ -96,6 +108,7 @@ func TestInitRegistry_SocketFromTownName(t *testing.T) {
 		os.Setenv("GT_TMUX_SOCKET", "mysocket")
 		townRoot := filepath.Join(t.TempDir(), "gt")
 		os.MkdirAll(townRoot, 0o755)
+		writeTownSettings(t, townRoot, config.TmuxSocketModeDefault)
 		_ = InitRegistry(townRoot)
 		got := tmux.GetDefaultSocket()
 		if got != "mysocket" {
@@ -113,6 +126,8 @@ func TestInitRegistry_SocketFromTownName(t *testing.T) {
 		townB := filepath.Join(tmpDir, "b", "gt")
 		os.MkdirAll(townA, 0o755)
 		os.MkdirAll(townB, 0o755)
+		writeTownSettings(t, townA, config.TmuxSocketModeAuto)
+		writeTownSettings(t, townB, config.TmuxSocketModeAuto)
 
 		_ = InitRegistry(townA)
 		socketA := tmux.GetDefaultSocket()
@@ -146,6 +161,7 @@ func TestInitRegistry_SocketFormat(t *testing.T) {
 
 	townRoot := filepath.Join(t.TempDir(), "myproject")
 	os.MkdirAll(townRoot, 0o755)
+	writeTownSettings(t, townRoot, config.TmuxSocketModeAuto)
 	_ = InitRegistry(townRoot)
 
 	got := tmux.GetDefaultSocket()
@@ -162,6 +178,15 @@ func TestInitRegistry_SocketFormat(t *testing.T) {
 			t.Errorf("socket hash suffix %q contains non-hex char %c", hash, c)
 			break
 		}
+	}
+}
+
+func writeTownSettings(t *testing.T, townRoot, socketMode string) {
+	t.Helper()
+	settings := config.NewTownSettings()
+	settings.TmuxSocketMode = socketMode
+	if err := config.SaveTownSettings(config.TownSettingsPath(townRoot), settings); err != nil {
+		t.Fatalf("SaveTownSettings(%q): %v", townRoot, err)
 	}
 }
 

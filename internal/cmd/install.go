@@ -13,8 +13,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/spf13/cobra"
-	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/beads"
+	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/deps"
@@ -118,6 +118,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	if townName == "" {
 		townName = filepath.Base(absPath)
 	}
+
+	firstTownInstall := isFirstTownInstall()
 
 	// Check if already a workspace
 	if isWS, _ := workspace.IsWorkspace(absPath); isWS && !installForce {
@@ -272,6 +274,14 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("rigs.json exists but is not a regular file")
 	} else {
 		fmt.Printf("   • mayor/rigs.json already exists, preserving\n")
+	}
+
+	if created, mode, err := ensureTownSettings(absPath, firstTownInstall); err != nil {
+		return fmt.Errorf("writing town settings: %w", err)
+	} else if created {
+		fmt.Printf("   ✓ Created settings/config.json (tmux_socket_mode=%s)\n", mode)
+	} else {
+		fmt.Printf("   • settings/config.json already exists, preserving\n")
 	}
 
 	// Create a generic CLAUDE.md at the town root as an identity anchor.
@@ -497,7 +507,39 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Printf("Note: Dolt server is running (stop with %s)\n", style.Dim.Render("gt dolt stop"))
 
+	if err := state.RecordInstall(Version); err != nil {
+		fmt.Printf("   %s Could not record install state: %v\n", style.Dim.Render("⚠"), err)
+	}
+
 	return nil
+}
+
+func isFirstTownInstall() bool {
+	_, err := state.Load()
+	return os.IsNotExist(err)
+}
+
+func ensureTownSettings(townRoot string, firstTownInstall bool) (created bool, mode string, err error) {
+	settingsPath := config.TownSettingsPath(townRoot)
+	if info, statErr := os.Stat(settingsPath); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return false, "", fmt.Errorf("settings/config.json exists but is not a regular file")
+		}
+		return false, "", nil
+	} else if !os.IsNotExist(statErr) {
+		return false, "", statErr
+	}
+
+	settings := config.NewTownSettings()
+	if firstTownInstall {
+		settings.TmuxSocketMode = config.TmuxSocketModeDefault
+	} else {
+		settings.TmuxSocketMode = config.TmuxSocketModeAuto
+	}
+	if err := config.SaveTownSettings(settingsPath, settings); err != nil {
+		return false, "", err
+	}
+	return true, settings.TmuxSocketMode, nil
 }
 
 // createTownRootAgentMDs creates a minimal, non-role-specific CLAUDE.md at the
