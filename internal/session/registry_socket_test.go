@@ -10,6 +10,15 @@ import (
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
+type fakeSocketSessionLister struct {
+	sessions []string
+	err      error
+}
+
+func (f fakeSocketSessionLister) ListSessions() ([]string, error) {
+	return f.sessions, f.err
+}
+
 // TestInitRegistry_SocketFromTownName verifies GT_TMUX_SOCKET socket selection:
 //   - unset + tmux_socket_mode=default → default tmux socket (empty name)
 //   - unset + tmux_socket_mode=auto    → per-town socket derived from town path
@@ -178,6 +187,142 @@ func TestInitRegistry_SocketFormat(t *testing.T) {
 			t.Errorf("socket hash suffix %q contains non-hex char %c", hash, c)
 			break
 		}
+	}
+}
+
+func TestInitRegistry_MigratesLegacyUnsetSocketModeFromDefaultSocket(t *testing.T) {
+	origSocket := tmux.GetDefaultSocket()
+	origGTSocket := os.Getenv("GT_TMUX_SOCKET")
+	t.Cleanup(func() {
+		os.Setenv("GT_TMUX_SOCKET", origGTSocket)
+		tmux.SetDefaultSocket(origSocket)
+		socketListerForTest = nil
+	})
+
+	os.Unsetenv("GT_TMUX_SOCKET")
+	tmux.SetDefaultSocket("")
+
+	townRoot := filepath.Join(t.TempDir(), "gt")
+	if err := os.MkdirAll(townRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	socketListerForTest = func(socket string) socketSessionLister {
+		switch socket {
+		case "default":
+			return fakeSocketSessionLister{sessions: []string{"hq-mayor"}}
+		case TownSocketName(townRoot), LegacySocketName(townRoot):
+			return fakeSocketSessionLister{err: tmux.ErrNoServer}
+		default:
+			return fakeSocketSessionLister{}
+		}
+	}
+
+	if err := InitRegistry(townRoot); err != nil {
+		t.Fatalf("InitRegistry() error = %v", err)
+	}
+	if got := tmux.GetDefaultSocket(); got != "" {
+		t.Fatalf("socket = %q, want empty default socket", got)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(townRoot))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeDefault {
+		t.Fatalf("TmuxSocketMode = %q, want %q", settings.TmuxSocketMode, config.TmuxSocketModeDefault)
+	}
+}
+
+func TestInitRegistry_MigratesLegacyUnsetSocketModeFromNamedSocket(t *testing.T) {
+	origSocket := tmux.GetDefaultSocket()
+	origGTSocket := os.Getenv("GT_TMUX_SOCKET")
+	t.Cleanup(func() {
+		os.Setenv("GT_TMUX_SOCKET", origGTSocket)
+		tmux.SetDefaultSocket(origSocket)
+		socketListerForTest = nil
+	})
+
+	os.Unsetenv("GT_TMUX_SOCKET")
+	tmux.SetDefaultSocket("")
+
+	townRoot := filepath.Join(t.TempDir(), "gt")
+	if err := os.MkdirAll(townRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hashedSocket := TownSocketName(townRoot)
+
+	socketListerForTest = func(socket string) socketSessionLister {
+		switch socket {
+		case "default":
+			return fakeSocketSessionLister{err: tmux.ErrNoServer}
+		case hashedSocket:
+			return fakeSocketSessionLister{sessions: []string{"hq-mayor"}}
+		case LegacySocketName(townRoot):
+			return fakeSocketSessionLister{err: tmux.ErrNoServer}
+		default:
+			return fakeSocketSessionLister{}
+		}
+	}
+
+	if err := InitRegistry(townRoot); err != nil {
+		t.Fatalf("InitRegistry() error = %v", err)
+	}
+	if got := tmux.GetDefaultSocket(); got != hashedSocket {
+		t.Fatalf("socket = %q, want %q", got, hashedSocket)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(townRoot))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != config.TmuxSocketModeAuto {
+		t.Fatalf("TmuxSocketMode = %q, want %q", settings.TmuxSocketMode, config.TmuxSocketModeAuto)
+	}
+}
+
+func TestInitRegistry_LegacyUnsetSocketModeConflictFallsBackToDefaultSocket(t *testing.T) {
+	origSocket := tmux.GetDefaultSocket()
+	origGTSocket := os.Getenv("GT_TMUX_SOCKET")
+	t.Cleanup(func() {
+		os.Setenv("GT_TMUX_SOCKET", origGTSocket)
+		tmux.SetDefaultSocket(origSocket)
+		socketListerForTest = nil
+	})
+
+	os.Unsetenv("GT_TMUX_SOCKET")
+	tmux.SetDefaultSocket("")
+
+	townRoot := filepath.Join(t.TempDir(), "gt")
+	if err := os.MkdirAll(townRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hashedSocket := TownSocketName(townRoot)
+
+	socketListerForTest = func(socket string) socketSessionLister {
+		switch socket {
+		case "default", hashedSocket:
+			return fakeSocketSessionLister{sessions: []string{"hq-mayor"}}
+		case LegacySocketName(townRoot):
+			return fakeSocketSessionLister{err: tmux.ErrNoServer}
+		default:
+			return fakeSocketSessionLister{}
+		}
+	}
+
+	if err := InitRegistry(townRoot); err != nil {
+		t.Fatalf("InitRegistry() error = %v", err)
+	}
+	if got := tmux.GetDefaultSocket(); got != "" {
+		t.Fatalf("socket = %q, want empty default socket on conflict", got)
+	}
+
+	settings, err := config.LoadOrCreateTownSettings(config.TownSettingsPath(townRoot))
+	if err != nil {
+		t.Fatalf("LoadOrCreateTownSettings() error = %v", err)
+	}
+	if settings.TmuxSocketMode != "" {
+		t.Fatalf("TmuxSocketMode = %q, want empty after conflict", settings.TmuxSocketMode)
 	}
 }
 
