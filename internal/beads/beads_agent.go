@@ -437,6 +437,17 @@ func (b *Beads) UpdateAgentState(id string, state string) (retErr error) {
 		target = NewWithBeadsDir(filepath.Dir(targetDir), targetDir)
 	}
 
+	// Agent beads migrated to the wisps table are ephemeral and do not always
+	// have a durable parent row in issues. bd set-state currently assumes an
+	// issues-backed bead and can fail with FK violations on child_counters even
+	// though bd show can still read the wisp. For wisps, keep the description in
+	// sync and skip the structured state write.
+	issue, showErr := target.Show(id)
+	if showErr == nil && issue != nil && issue.Ephemeral {
+		_ = target.UpdateAgentDescriptionFields(id, AgentFieldUpdates{AgentState: &state})
+		return nil
+	}
+
 	_, err := target.run("set-state", id, "agent_state="+state)
 	if err != nil {
 		return fmt.Errorf("updating agent state: %w", err)

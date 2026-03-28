@@ -145,6 +145,106 @@ esac
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func installMockBDEphemeralAgentState(t *testing.T, expectedBeadsDir string) {
+	t.Helper()
+
+	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		scriptPath := filepath.Join(binDir, "bd.cmd")
+		script := fmt.Sprintf(`@echo off
+setlocal EnableDelayedExpansion
+set "cmd="
+:findcmd
+if "%%~1"=="" goto havecmd
+set "arg=%%~1"
+if /I "!arg:~0,2!"=="--" (
+  shift
+  goto findcmd
+)
+set "cmd=%%~1"
+:havecmd
+set "target=%%BEADS_DIR%%"
+if "%%target%%"=="" set "target=%%CD%%\.beads"
+if /I not "%%target%%"=="%s" (
+  >&2 echo wrong target %%target%%
+  exit /b 9
+)
+if /I "%%cmd%%"=="version" exit /b 0
+if /I "%%cmd%%"=="show" (
+  echo([{"id":"ri-revtec_int-polecat-scavenger","title":"Polecat scavenger","issue_type":"agent","labels":["gt:agent"],"description":"role_type: polecat\nrig: revtec_int\nagent_state: idle\nhook_bead: null","agent_state":"idle","ephemeral":true}]
+  exit /b 0
+)
+if /I "%%cmd%%"=="set-state" (
+  >&2 echo set-state should not be called for ephemeral agent beads
+  exit /b 11
+)
+if /I "%%cmd%%"=="update" (
+  echo %%* | findstr /C:"--description=role_type: polecat" /C:"agent_state: spawning" >nul || (
+    >&2 echo missing updated agent_state in description
+    exit /b 12
+  )
+  exit /b 0
+)
+exit /b 0
+`, expectedBeadsDir)
+		if err := os.WriteFile(scriptPath, []byte(script), 0644); err != nil {
+			t.Fatalf("write mock bd: %v", err)
+		}
+		t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		return
+	}
+
+	script := fmt.Sprintf(`#!/bin/sh
+cmd=""
+for arg in "$@"; do
+  case "$arg" in
+    --*) ;;
+    *) cmd="$arg"; break ;;
+  esac
+done
+
+target="${BEADS_DIR:-$(pwd)/.beads}"
+if [ "$target" != "%s" ]; then
+  echo "wrong target $target" >&2
+  exit 9
+fi
+
+case "$cmd" in
+  version)
+    exit 0
+    ;;
+  show)
+    printf '%%s\n' '[{"id":"ri-revtec_int-polecat-scavenger","title":"Polecat scavenger","issue_type":"agent","labels":["gt:agent"],"description":"role_type: polecat\nrig: revtec_int\nagent_state: idle\nhook_bead: null","agent_state":"idle","ephemeral":true}]'
+    exit 0
+    ;;
+  set-state)
+    echo "set-state should not be called for ephemeral agent beads" >&2
+    exit 11
+    ;;
+  update)
+    case "$*" in
+      *"--description=role_type: polecat"*"agent_state: spawning"*)
+        exit 0
+        ;;
+      *)
+        echo "missing updated agent_state in description" >&2
+        exit 12
+        ;;
+    esac
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`, expectedBeadsDir)
+	scriptPath := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write mock bd: %v", err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestGetAgentBead_PrefersStructuredAgentState(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, ".beads"), 0755); err != nil {
@@ -204,6 +304,21 @@ func TestUpdateAgentState_UsesExplicitBeadsDir(t *testing.T) {
 
 	bd := NewWithBeadsDir(workDir, targetBeadsDir)
 	if err := bd.UpdateAgentState("gt-gastown-polecat-nux", "spawning"); err != nil {
+		t.Fatalf("UpdateAgentState: %v", err)
+	}
+}
+
+func TestUpdateAgentState_EphemeralAgentBeadSkipsSetState(t *testing.T) {
+	workDir := t.TempDir()
+	targetBeadsDir := filepath.Join(t.TempDir(), ".beads")
+	if err := os.MkdirAll(targetBeadsDir, 0755); err != nil {
+		t.Fatalf("mkdir target .beads: %v", err)
+	}
+
+	installMockBDEphemeralAgentState(t, targetBeadsDir)
+
+	bd := NewWithBeadsDir(workDir, targetBeadsDir)
+	if err := bd.UpdateAgentState("ri-revtec_int-polecat-scavenger", "spawning"); err != nil {
 		t.Fatalf("UpdateAgentState: %v", err)
 	}
 }
