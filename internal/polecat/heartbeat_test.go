@@ -184,7 +184,7 @@ func TestIsSessionProcessDead_HeartbeatFresh(t *testing.T) {
 	}
 }
 
-func TestIsSessionProcessDead_HeartbeatStale(t *testing.T) {
+func TestIsSessionProcessDead_HeartbeatStaleWithoutTmux(t *testing.T) {
 	townRoot := t.TempDir()
 	sessionName := "gt-test-hb-dead"
 
@@ -200,8 +200,8 @@ func TestIsSessionProcessDead_HeartbeatStale(t *testing.T) {
 	}
 
 	dead := isSessionProcessDead(nil, sessionName, townRoot)
-	if !dead {
-		t.Error("expected dead=true for session with stale heartbeat")
+	if dead {
+		t.Error("expected dead=false for stale heartbeat without tmux PID confirmation")
 	}
 }
 

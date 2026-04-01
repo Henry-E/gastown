@@ -1765,8 +1765,7 @@ func (m *Manager) ReconcilePoolWith(namesWithDirs, namesWithSessions []string) {
 //
 // Uses heartbeat-based liveness detection (gt-qjtq): checks whether the session's
 // heartbeat file has been updated recently. Polecat sessions touch their heartbeat
-// via gt commands (gt prime, gt hook, bd show, etc.) which run frequently during
-// normal operation. A stale heartbeat indicates the agent is no longer active.
+// via gt commands (gt prime, gt hook, bd show, etc.).
 //
 // Falls back to PID signal probing when no heartbeat file exists (backward
 // compatibility for sessions started before heartbeat support was added).
@@ -1778,36 +1777,52 @@ func isSessionProcessDead(t *tmux.Tmux, sessionName string, townRoot string) boo
 	if townRoot != "" {
 		stale, exists := IsSessionHeartbeatStale(townRoot, sessionName)
 		if exists {
-			return stale
+			if !stale {
+				return false
+			}
+			// A stale heartbeat alone is not enough to reap a session: working
+			// Codex polecats can go quiet for minutes without running a gt command.
+			// Only treat the session as dead if the pane PID is also gone.
+			return !isSessionPaneProcessAlive(t, sessionName)
 		}
 		// No heartbeat file — fall through to PID-based check for backward compatibility.
 	}
 
 	// Fallback: PID signal probing (legacy, for sessions without heartbeat support).
+	return !isSessionPaneProcessAlive(t, sessionName)
+}
+
+// isSessionPaneProcessAlive returns true only when the tmux pane PID exists and
+// still responds to signal 0. Unknown states are treated as alive so callers
+// don't reap sessions on transient tmux/proc lookup failures.
+func isSessionPaneProcessAlive(t *tmux.Tmux, sessionName string) bool {
+	if t == nil {
+		return true
+	}
 	pidStr, err := t.GetPanePID(sessionName)
 	if err != nil {
 		// Tmux query failed — could be permission denied, server busy, etc.
 		// Don't assume dead; let a future cycle retry.
-		return false
+		return true
 	}
 	if pidStr == "" {
 		// No PID means no process — session is dead.
-		return true
+		return false
 	}
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
 		// Got a non-numeric PID — shouldn't happen, but don't kill.
-		return false
+		return true
 	}
 	p, err := os.FindProcess(pid)
 	if err != nil {
-		return true
+		return false
 	}
 	// On Unix, Signal(0) checks if process exists without sending a signal
 	if err := p.Signal(syscall.Signal(0)); err != nil {
-		return true
+		return false
 	}
-	return false
+	return true
 }
 
 // pendingMaxAge is how long a .pending reservation marker may exist before

@@ -661,6 +661,59 @@ func TestReconcilePoolWith_OrphanDoesNotBlockAllocation(t *testing.T) {
 	}
 }
 
+func TestReconcilePoolWith_StaleHeartbeatDoesNotKillLiveSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("tmux not supported on Windows")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+
+	townRoot := t.TempDir()
+	rigName := "myrig"
+	rigPath := filepath.Join(townRoot, rigName)
+	polecatName := "nux"
+	polecatDir := filepath.Join(rigPath, "polecats", polecatName)
+	clonePath := filepath.Join(polecatDir, rigName)
+	if err := os.MkdirAll(clonePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tm := tmux.NewTmux()
+	r := &rig.Rig{Name: rigName, Path: rigPath}
+	mgr := NewManager(r, git.NewGit(rigPath), tm)
+
+	sessMgr := NewSessionManager(tm, r)
+	sessionName := sessMgr.SessionName(polecatName)
+	if err := tm.NewSessionWithCommand(sessionName, townRoot, "sleep 300"); err != nil {
+		t.Fatalf("create tmux session: %v", err)
+	}
+	t.Cleanup(func() { _ = tm.KillSessionWithProcesses(sessionName) })
+
+	dir := filepath.Join(townRoot, ".runtime", "heartbeats")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-10 * time.Minute).UTC()
+	data := []byte(`{"timestamp":"` + oldTime.Format(time.RFC3339Nano) + `","state":"working"}`)
+	if err := os.WriteFile(filepath.Join(dir, sessionName+".json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.ReconcilePoolWith([]string{polecatName}, []string{polecatName})
+
+	running, err := tm.HasSession(sessionName)
+	if err != nil {
+		t.Fatalf("check session: %v", err)
+	}
+	if !running {
+		t.Fatal("live session should not be killed just because heartbeat is stale")
+	}
+	if hb := ReadSessionHeartbeat(townRoot, sessionName); hb == nil {
+		t.Fatal("heartbeat should remain for a live stale session")
+	}
+}
+
 func TestIsDoltConfigError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1765,8 +1818,8 @@ func TestReuseIdlePolecat_KillsLiveSession(t *testing.T) {
 
 	// Verify it did NOT return ErrSessionRunning (the old buggy behavior)
 	if errors.Is(reuseErr, ErrSessionRunning) {
-		t.Fatalf("ReuseIdlePolecat returned ErrSessionRunning for live session — "+
-			"this is the sling-reuse-stale-session bug: idle polecats with live "+
+		t.Fatalf("ReuseIdlePolecat returned ErrSessionRunning for live session — " +
+			"this is the sling-reuse-stale-session bug: idle polecats with live " +
 			"sessions must have their session killed, not rejected")
 	}
 
