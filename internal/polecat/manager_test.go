@@ -679,7 +679,9 @@ func TestReconcilePoolWith_StaleHeartbeatDoesNotKillLiveSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tm := tmux.NewTmux()
+	socketName := fmt.Sprintf("reconcile-stale-%d", time.Now().UnixNano())
+	tm := tmux.NewTmuxWithSocket(socketName)
+	t.Cleanup(func() { _ = tm.KillServer() })
 	r := &rig.Rig{Name: rigName, Path: rigPath}
 	mgr := NewManager(r, git.NewGit(rigPath), tm)
 
