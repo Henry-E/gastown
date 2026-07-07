@@ -2599,11 +2599,7 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 
 	// Query all rigs in parallel using bd list
 	type rigResult struct {
-		agents []struct {
-			ID           string `json:"id"`
-			HookBead     string `json:"hook_bead"`
-			LastActivity string `json:"last_activity"`
-		}
+		agents []workerScanAgent
 	}
 
 	resultChan := make(chan rigResult, len(targets))
@@ -2627,6 +2623,20 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 				return
 			}
 
+			// Cycle-scoped shared cache: the daemon spawns a separate
+			// `gt convoy check` process per open convoy per cycle, and each
+			// one runs this identical, issue-independent scan. A per-rig
+			// cache file (TTL 25s, strictly less than the 30s daemon cycle)
+			// lets those sibling processes share one scan. Any cache
+			// read/parse problem falls through to a live scan (fail open) —
+			// stranded-work handling must never act on data older than one
+			// cycle. See convoy_scan_cache.go.
+			now := time.Now()
+			if agents, ok := readWorkerScanCache(townRoot, rt.name, now); ok {
+				resultChan <- rigResult{agents: agents}
+				return
+			}
+
 			cmd := exec.Command("bd", "list", "--type=agent", "--status=open", "--json", "--limit=0")
 			cmd.Dir = rt.beadsDir
 			var stdout bytes.Buffer
@@ -2641,6 +2651,9 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 				resultChan <- rigResult{}
 				return
 			}
+			// Cache only successful scans; failures above return without
+			// writing so the next check retries live.
+			writeWorkerScanCache(townRoot, rt.name, rr.agents, now)
 			resultChan <- rr
 		}(target)
 	}
