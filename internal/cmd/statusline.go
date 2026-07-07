@@ -639,7 +639,28 @@ func isSessionWorking(t *tmux.Tmux, session string) bool {
 
 // getMailPreviewWithRoot returns unread count and a truncated subject of the first unread message,
 // using an explicit town root.
+//
+// Results are served from a per-identity cache file with a 30s TTL
+// (see statusline_mailcache.go). Tmux re-runs `gt status-line` on every
+// status bar refresh for every session; without the cache each refresh
+// fired the full unbounded mail scan into Dolt.
 func getMailPreviewWithRoot(identity string, maxLen int, townRoot string) (int, string) {
+	unread, subject := getMailPreviewCached(identity, townRoot, func() (int, string) {
+		return fetchMailPreview(identity, townRoot)
+	})
+
+	// Truncate on read: the cache stores the full subject so one entry
+	// serves callers with different display widths.
+	if len(subject) > maxLen {
+		subject = subject[:maxLen-1] + "…"
+	}
+
+	return unread, subject
+}
+
+// fetchMailPreview runs the live mail query: unread count plus the first
+// unread message's full (untruncated) subject.
+func fetchMailPreview(identity, townRoot string) (int, string) {
 	// Use NewMailboxFromAddress to normalize identity (e.g., gastown/crew/gus -> gastown/gus)
 	mailbox := mail.NewMailboxFromAddress(identity, townRoot)
 
@@ -649,13 +670,7 @@ func getMailPreviewWithRoot(identity string, maxLen int, townRoot string) (int, 
 		return 0, ""
 	}
 
-	// Get first message subject, truncated
-	subject := messages[0].Subject
-	if len(subject) > maxLen {
-		subject = subject[:maxLen-1] + "…"
-	}
-
-	return len(messages), subject
+	return len(messages), messages[0].Subject
 }
 
 // getHookedWork returns a truncated title of the hooked bead for an agent.
