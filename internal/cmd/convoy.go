@@ -2553,7 +2553,10 @@ type workerInfo struct {
 // Returns a map from issue ID to worker info.
 //
 // Optimized to batch queries per rig (O(R) instead of O(N×R)) and
-// parallelize across rigs.
+// parallelize across rigs. Parked/docked rigs are skipped entirely — they
+// have no live polecats, and scanning every rig's beads database from every
+// convoy check is what saturates the Dolt server when the daemon's
+// stranded-convoy scan iterates all open convoys.
 func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 	result := make(map[string]*workerInfo)
 	if len(issueIDs) == 0 {
@@ -2574,16 +2577,23 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 
 	// Discover rigs with beads directories
 	rigDirs, _ := filepath.Glob(filepath.Join(townRoot, "*", "polecats"))
-	var beadsDirs []string
+	type rigTarget struct {
+		name     string // rig name (directory under town root)
+		beadsDir string // rig's mayor/rig clone (where bd runs)
+	}
+	var targets []rigTarget
 	for _, polecatsDir := range rigDirs {
 		rigDir := filepath.Dir(polecatsDir)
 		beadsDir := filepath.Join(rigDir, "mayor", "rig", ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
-			beadsDirs = append(beadsDirs, filepath.Join(rigDir, "mayor", "rig"))
+			targets = append(targets, rigTarget{
+				name:     filepath.Base(rigDir),
+				beadsDir: filepath.Join(rigDir, "mayor", "rig"),
+			})
 		}
 	}
 
-	if len(beadsDirs) == 0 {
+	if len(targets) == 0 {
 		return result
 	}
 
@@ -2596,16 +2606,29 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 		}
 	}
 
-	resultChan := make(chan rigResult, len(beadsDirs))
+	resultChan := make(chan rigResult, len(targets))
 	var wg sync.WaitGroup
 
-	for _, dir := range beadsDirs {
+	for _, target := range targets {
 		wg.Add(1)
-		go func(beadsDir string) {
+		go func(rt rigTarget) {
 			defer wg.Done()
 
+			// Skip parked/docked rigs: they have no live polecats, so the
+			// unbounded agent scan below is pure waste for them. This matters
+			// because the daemon's stranded-convoy scan runs a convoy check
+			// (and therefore this fan-out) for every open convoy every cycle;
+			// scanning every rig's beads database regardless of dock status
+			// is the dominant load on the Dolt server. The parked/docked
+			// check is cheap by comparison: a local wisp read plus a
+			// single-bead lookup.
+			if blocked, _ := IsRigParkedOrDocked(townRoot, rt.name); blocked {
+				resultChan <- rigResult{}
+				return
+			}
+
 			cmd := exec.Command("bd", "list", "--type=agent", "--status=open", "--json", "--limit=0")
-			cmd.Dir = beadsDir
+			cmd.Dir = rt.beadsDir
 			var stdout bytes.Buffer
 			cmd.Stdout = &stdout
 			if err := cmd.Run(); err != nil {
@@ -2619,7 +2642,7 @@ func getWorkersForIssues(issueIDs []string) map[string]*workerInfo {
 				return
 			}
 			resultChan <- rr
-		}(dir)
+		}(target)
 	}
 
 	// Wait for all queries to complete
