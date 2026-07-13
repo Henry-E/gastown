@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,12 +36,12 @@ var (
 	mqRejectStdin  bool // Read reason from stdin
 
 	// List command flags
-	mqListReady   bool
-	mqListStatus  string
-	mqListWorker  string
-	mqListEpic    string
-	mqListJSON    bool
-	mqListVerify  bool
+	mqListReady  bool
+	mqListStatus string
+	mqListWorker string
+	mqListEpic   string
+	mqListJSON   bool
+	mqListVerify bool
 
 	// Status command flags
 	mqStatusJSON bool
@@ -165,18 +166,40 @@ Examples:
 	RunE: runMQReject,
 }
 
-// Post-merge flags
-var mqPostMergeSkipBranchDelete bool
+// Receipt and post-merge flags
+var (
+	mqRecordDeliveryTargetSHA   string
+	mqRecordDeliveryMode        string
+	mqPostMergeSkipBranchDelete bool
+)
+
+var mqRecordDeliveryCmd = &cobra.Command{
+	Use:   "record-delivery <rig> <mr-id>",
+	Short: "Verify a pushed merge result and durably record its receipt",
+	Long: `Record a delivery receipt after the refinery has pushed a merge result.
+
+The command freshly reads the configured push target and requires it to match
+--target-sha. --mode records the refinery's actual direct or hosted-PR path.
+It fsyncs an append-only receipt before returning success. It does
+not close the MR/source or delete any branch; post-merge cleanup consumes the
+receipt in a separate command.
+
+Examples:
+  gt mq record-delivery gastown gt-mr-abc123 --target-sha "$REMOTE_SHA" --mode direct`,
+	Args: cobra.ExactArgs(2),
+	RunE: runMQRecordDelivery,
+}
 
 var mqPostMergeCmd = &cobra.Command{
 	Use:   "post-merge <rig> <mr-id>",
 	Short: "Run post-merge cleanup (close MR, delete branch)",
 	Long: `Perform post-merge cleanup after a successful merge.
 
-This command consolidates post-merge steps into a single atomic operation:
-  1. Close the MR bead (status: merged)
-  2. Close the source issue
-  3. Delete the remote polecat branch (unless --skip-branch-delete)
+This command consolidates post-merge steps into a single ordered operation:
+  1. Validate a durable producer receipt against the fresh remote target
+  2. Close the MR bead (status: merged)
+  3. Close the source issue
+  4. Delete the remote polecat branch (unless --skip-branch-delete)
 
 Designed for use by the refinery formula after a successful merge to main.
 The branch name is read from the MR bead, so no manual branch argument is needed.
@@ -333,6 +356,8 @@ func init() {
 	mqStatusCmd.Flags().BoolVar(&mqStatusJSON, "json", false, "Output as JSON")
 
 	// Post-merge flags
+	mqRecordDeliveryCmd.Flags().StringVar(&mqRecordDeliveryTargetSHA, "target-sha", "", "Expected target SHA produced by the merge (required)")
+	mqRecordDeliveryCmd.Flags().StringVar(&mqRecordDeliveryMode, "mode", "", "Refinery merge mode: direct or pr (default: rig config)")
 	mqPostMergeCmd.Flags().BoolVar(&mqPostMergeSkipBranchDelete, "skip-branch-delete", false, "Skip remote branch deletion")
 
 	// Add subcommands
@@ -341,6 +366,7 @@ func init() {
 	mqCmd.AddCommand(mqListCmd)
 	mqCmd.AddCommand(mqRejectCmd)
 	mqCmd.AddCommand(mqStatusCmd)
+	mqCmd.AddCommand(mqRecordDeliveryCmd)
 	mqCmd.AddCommand(mqPostMergeCmd)
 
 	// Integration branch subcommands
@@ -501,6 +527,33 @@ func runMQReject(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runMQRecordDelivery(_ *cobra.Command, args []string) error {
+	rigName := args[0]
+	mrID := args[1]
+	if strings.TrimSpace(mqRecordDeliveryTargetSHA) == "" {
+		return errors.New("--target-sha is required")
+	}
+
+	mgr, r, _, err := getRefineryManager(rigName)
+	if err != nil {
+		return err
+	}
+	mr, err := mgr.GetMR(mrID)
+	if err != nil {
+		return fmt.Errorf("getting merge request before recording delivery: %w", err)
+	}
+	townRoot, _, err := getRig(rigName)
+	if err != nil {
+		return err
+	}
+	receipt, err := persistMQDeliveryReceipt(townRoot, rigName, r, mr, mqRecordDeliveryTargetSHA, mqRecordDeliveryMode)
+	if err != nil {
+		return fmt.Errorf("record delivery: %w", err)
+	}
+	fmt.Printf("%s Delivery receipt: %s (%s)\n", style.Success.Render("✓"), receipt.ReceiptID, receipt.FinalTargetSHA)
+	return nil
+}
+
 func runMQPostMerge(_ *cobra.Command, args []string) error {
 	rigName := args[0]
 	mrID := args[1]
@@ -509,6 +562,23 @@ func runMQPostMerge(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	mr, err := mgr.GetMR(mrID)
+	if err != nil {
+		return fmt.Errorf("getting merge request before post-merge cleanup: %w", err)
+	}
+	townRoot, _, err := getRig(rigName)
+	if err != nil {
+		return err
+	}
+	receipt, receiptErr := validatePostMergeReceipt(townRoot, rigName, r, mr)
+	if receiptErr != nil {
+		if errors.Is(receiptErr, errDeliveryReceiptPersistence) || postMergeReceiptStrict(mr) {
+			return fmt.Errorf("post-merge cleanup deferred: %w", receiptErr)
+		}
+		fmt.Printf("  %s Receipt gate WARN-ONLY: enforcement would refuse cleanup: %v\n", style.Warning.Render("⚠"), receiptErr)
+	} else {
+		fmt.Printf("  %s Delivery receipt: %s (%s)\n", style.Success.Render("✓"), receipt.ReceiptID, receipt.FinalTargetSHA)
+	}
 
 	// Run beads-level cleanup (close MR bead + source issue)
 	result, err := mgr.PostMerge(mrID)
@@ -516,7 +586,7 @@ func runMQPostMerge(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("post-merge cleanup: %w", err)
 	}
 
-	mr := result.MR
+	mr = result.MR
 	fmt.Printf("%s Post-merge: %s\n", style.Bold.Render("✓"), mr.ID)
 	fmt.Printf("  Branch: %s\n", mr.Branch)
 	fmt.Printf("  Worker: %s\n", mr.Worker)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
@@ -238,12 +239,31 @@ func runMqSubmit(cmd *cobra.Command, args []string) error {
 		style.PrintWarning("could not resolve HEAD SHA: %v (falling back to branch-only dedup)", shaErr)
 	}
 
+	// Mint an immutable delivery attempt at submission. Barnaby attribution is
+	// optional and comes from dispatch formula vars or an explicit environment.
+	attemptID := uuid.NewString()
+	barnabyJobID := strings.TrimSpace(os.Getenv("BARNABY_JOB_ID"))
+	if barnabyJobID == "" && sourceIssue != nil {
+		if attachment := beads.ParseAttachmentFields(sourceIssue); attachment != nil {
+			barnabyJobID = extractFormulaVar(attachment.FormulaVars, "barnaby_job_id")
+		}
+	}
+	if barnabyJobID != "" {
+		if _, parseErr := uuid.Parse(barnabyJobID); parseErr != nil {
+			style.PrintWarning("ignoring invalid Barnaby job id %q", barnabyJobID)
+			barnabyJobID = ""
+		}
+	}
+
 	// Build MR bead title and description
 	title := fmt.Sprintf("Merge: %s", issueID)
-	description := fmt.Sprintf("branch: %s\ntarget: %s\nsource_issue: %s\nrig: %s",
-		branch, target, issueID, rigName)
+	description := fmt.Sprintf("branch: %s\ntarget: %s\nsource_issue: %s\nrig: %s\nattempt_id: %s",
+		branch, target, issueID, rigName, attemptID)
 	if commitSHA != "" {
 		description += fmt.Sprintf("\ncommit_sha: %s", commitSHA)
+	}
+	if barnabyJobID != "" {
+		description += fmt.Sprintf("\nbarnaby_job_id: %s", barnabyJobID)
 	}
 	if worker != "" {
 		description += fmt.Sprintf("\nworker: %s", worker)

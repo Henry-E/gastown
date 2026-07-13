@@ -743,13 +743,17 @@ author: someone`,
 // TestMRFieldsRoundTrip tests that parse/format round-trips correctly.
 func TestMRFieldsRoundTrip(t *testing.T) {
 	original := &MRFields{
-		Branch:      "polecat/Nux/gt-xyz",
-		Target:      "main",
-		SourceIssue: "gt-xyz",
-		Worker:      "Nux",
-		Rig:         "gastown",
-		MergeCommit: "abc123def789",
-		CloseReason: "merged",
+		Branch:           "polecat/Nux/gt-xyz",
+		Target:           "main",
+		SourceIssue:      "gt-xyz",
+		Worker:           "Nux",
+		Rig:              "gastown",
+		CommitSHA:        "0123456789abcdef0123456789abcdef01234567",
+		AttemptID:        "attempt-123",
+		BarnabyJobID:     "67c0efff-d338-4658-9b2b-f7b8a76de56c",
+		DeliveryStrategy: "batch",
+		MergeCommit:      "abc123def789",
+		CloseReason:      "merged",
 	}
 
 	// Format to string

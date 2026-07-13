@@ -69,6 +69,7 @@ const HQGitignore = `# Gas Town HQ .gitignore
 **/activity.json
 .events.jsonl
 .feed.jsonl
+delivery-receipts/
 **/audit.log
 **/last-touched
 **/.local_version

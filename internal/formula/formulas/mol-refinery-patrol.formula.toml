@@ -643,6 +643,24 @@ If merge fails (conflict, branch protection), debug and retry.
 
 ⚠️ **STOP HERE - DO NOT PROCEED UNTIL THE PR IS ACTUALLY MERGED ON GITHUB**
 
+**Step 1.7 (all strategies): RECORD DURABLE DELIVERY RECEIPT**
+
+The receipt command is the deterministic producer boundary. Freshly resolve
+the exact target ref from the effective push URL and pass that observed merge
+result to the command for an independent reread and durable append:
+
+```bash
+PUSH_URL=$(git remote get-url --push origin)
+DELIVERED_SHA=$(git ls-remote --refs "$PUSH_URL" "refs/heads/<merge-target>" | awk 'NR == 1 { print $1 }')
+test -n "$DELIVERED_SHA"
+gt mq record-delivery <rig> <mr-bead-id> --target-sha "$DELIVERED_SHA" --mode "{{merge_strategy}}"
+```
+
+If receipt recording fails, STOP before notification or cleanup. The merge is
+already delivered and must not be repeated merely because the receipt store is
+unavailable. Retry `gt mq record-delivery` with the same target SHA; it is
+idempotent. Do not close the MR/source or delete any branch until it succeeds.
+
 **Step 2: Send MERGED Notification (REQUIRED - DO THIS IMMEDIATELY)**
 
 RIGHT NOW, before any cleanup, send MERGED mail to Witness.
@@ -700,6 +718,7 @@ git branch -d temp
 ```
 
 **VERIFICATION GATE**: You CANNOT proceed to loop-check without:
+- [x] Durable delivery receipt recorded
 - [x] MERGED mail sent to witness (with PR URL if merge_strategy=pr)
 - [x] Post-merge cleanup completed (MR closed, source issue closed, branch deleted)
 - [x] MERGE_READY mail archived

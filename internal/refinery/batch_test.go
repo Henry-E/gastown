@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/gastown/internal/beads"
+	"github.com/steveyegge/gastown/internal/deliveryreceipt"
 	gitpkg "github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/rig"
 )
@@ -105,10 +106,14 @@ func newTestEngineer(t *testing.T, workDir string, g *gitpkg.Git) *Engineer {
 
 func makeMR(id, branch, target string) *MRInfo {
 	return &MRInfo{
-		ID:        id,
-		Branch:    branch,
-		Target:    target,
-		CreatedAt: time.Now(),
+		ID:          id,
+		Branch:      branch,
+		Target:      target,
+		SourceIssue: id + "-source",
+		CommitSHA:   strings.Repeat("a", 40),
+		AttemptID:   id + "-attempt",
+		Rig:         "test-rig",
+		CreatedAt:   time.Now(),
 	}
 }
 
@@ -422,6 +427,29 @@ func TestProcessBatch_MultipleMRs_AllPass(t *testing.T) {
 	}
 	if result.MergeCommit == "" {
 		t.Error("expected merge commit SHA")
+	}
+	var batchID string
+	for _, mr := range batch {
+		receipt, err := deliveryreceipt.Find(filepath.Dir(workDir), deliveryreceipt.Identity{
+			Rig: mr.Rig, SourceBead: mr.SourceIssue, AttemptID: mr.AttemptID,
+		})
+		if err != nil {
+			t.Fatalf("find receipt for %s: %v", mr.ID, err)
+		}
+		if receipt == nil {
+			t.Fatalf("receipt for %s was not persisted", mr.ID)
+		}
+		if receipt.MergeStrategy != "batch" || receipt.FinalTargetSHA != result.MergeCommit {
+			t.Fatalf("receipt for %s = strategy %s target %s, want batch %s", mr.ID, receipt.MergeStrategy, receipt.FinalTargetSHA, result.MergeCommit)
+		}
+		if batchID == "" {
+			batchID = receipt.BatchID
+		} else if receipt.BatchID != batchID {
+			t.Fatalf("receipt for %s batch_id = %s, want %s", mr.ID, receipt.BatchID, batchID)
+		}
+	}
+	if batchID == "" {
+		t.Fatal("batch receipts must share a non-empty batch_id")
 	}
 
 	// Verify all files landed on main

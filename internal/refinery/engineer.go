@@ -187,20 +187,25 @@ func DefaultMergeQueueConfig() *MergeQueueConfig {
 // MRInfo holds merge request information for display and processing.
 // This replaces mrqueue.MR after the mrqueue package removal.
 type MRInfo struct {
-	ID              string     // Bead ID (e.g., "gt-abc123")
-	Branch          string     // Source branch (e.g., "polecat/nux")
-	Target          string     // Target branch (e.g., "main")
-	SourceIssue     string     // The work item being merged
-	Worker          string     // Who did the work
-	Rig             string     // Which rig
-	Title           string     // MR title
-	Priority        int        // Priority (lower = higher priority)
-	AgentBead       string     // Agent bead ID that created this MR
-	RetryCount      int        // Conflict retry count
-	ConvoyID        string     // Parent convoy ID if part of a convoy
-	ConvoyCreatedAt *time.Time // Convoy creation time
-	CreatedAt       time.Time  // MR creation time
-	BlockedBy       string     // Task ID blocking this MR
+	ID               string     // Bead ID (e.g., "gt-abc123")
+	Branch           string     // Source branch (e.g., "polecat/nux")
+	Target           string     // Target branch (e.g., "main")
+	SourceIssue      string     // The work item being merged
+	CommitSHA        string     // Submitted source commit before refinery rewrites
+	AttemptID        string     // Immutable submission attempt identifier
+	BarnabyJobID     string     // Barnaby job UUID when known
+	MergeCommit      string     // Pushed target result checkpoint for receipt retry
+	DeliveryStrategy string     // Strategy associated with the pushed checkpoint
+	Worker           string     // Who did the work
+	Rig              string     // Which rig
+	Title            string     // MR title
+	Priority         int        // Priority (lower = higher priority)
+	AgentBead        string     // Agent bead ID that created this MR
+	RetryCount       int        // Conflict retry count
+	ConvoyID         string     // Parent convoy ID if part of a convoy
+	ConvoyCreatedAt  *time.Time // Convoy creation time
+	CreatedAt        time.Time  // MR creation time
+	BlockedBy        string     // Task ID blocking this MR
 
 	// Pre-verification fields (Phase 3: polecat-owned rebasing)
 	// When set, the refinery can skip gates if VerifiedBase matches target HEAD.
@@ -224,7 +229,6 @@ type MRAnomaly struct {
 	Age      time.Duration `json:"age,omitempty"`
 	Detail   string        `json:"detail"`
 }
-
 
 // errMergeSlotTimeout is returned by acquireMainPushSlot when retries are
 // exhausted due to slot contention. Infrastructure errors (beads down,
@@ -323,18 +327,18 @@ func (e *Engineer) LoadConfig() error {
 	// Parse merge_queue section into our config struct
 	// We need special handling for poll_interval (string -> Duration)
 	var mqRaw struct {
-		Enabled              *bool                      `json:"enabled"`
-		OnConflict           *string                    `json:"on_conflict"`
-		RunTests             *bool                      `json:"run_tests"`
-		TestCommand          *string                    `json:"test_command"`
-		DeleteMergedBranches *bool                      `json:"delete_merged_branches"`
-		RetryFlakyTests      *int                       `json:"retry_flaky_tests"`
-		PollInterval         *string                    `json:"poll_interval"`
-		MaxConcurrent        *int                       `json:"max_concurrent"`
-		StaleClaimTimeout    *string                    `json:"stale_claim_timeout"`
-		Gates                map[string]*gateConfigRaw  `json:"gates"`
-		GatesParallel        *bool                      `json:"gates_parallel"`
-		AutoPush             *bool                      `json:"auto_push"`
+		Enabled              *bool                     `json:"enabled"`
+		OnConflict           *string                   `json:"on_conflict"`
+		RunTests             *bool                     `json:"run_tests"`
+		TestCommand          *string                   `json:"test_command"`
+		DeleteMergedBranches *bool                     `json:"delete_merged_branches"`
+		RetryFlakyTests      *int                      `json:"retry_flaky_tests"`
+		PollInterval         *string                   `json:"poll_interval"`
+		MaxConcurrent        *int                      `json:"max_concurrent"`
+		StaleClaimTimeout    *string                   `json:"stale_claim_timeout"`
+		Gates                map[string]*gateConfigRaw `json:"gates"`
+		GatesParallel        *bool                     `json:"gates_parallel"`
+		AutoPush             *bool                     `json:"auto_push"`
 	}
 
 	if err := json.Unmarshal(rawConfig.MergeQueue, &mqRaw); err != nil {
@@ -432,14 +436,16 @@ func (e *Engineer) Config() *MergeQueueConfig {
 
 // ProcessResult contains the result of processing a merge request.
 type ProcessResult struct {
-	Success        bool
-	MergeCommit    string
-	Error          string
-	Conflict       bool
-	TestsFailed    bool
-	SlotTimeout    bool // Merge slot contention timeout (distinct from build/test failure)
-	BranchNotFound bool // Source branch no longer exists (e.g. cleaned up after cherry-pick)
-	NoMerge        bool // Source issue has no_merge flag — intentionally blocked, not a failure
+	Success         bool
+	MergeCommit     string
+	Error           string
+	Conflict        bool
+	TestsFailed     bool
+	SlotTimeout     bool // Merge slot contention timeout (distinct from build/test failure)
+	BranchNotFound  bool // Source branch no longer exists (e.g. cleaned up after cherry-pick)
+	NoMerge         bool // Source issue has no_merge flag — intentionally blocked, not a failure
+	CleanupDeferred bool // Merge pushed, but receipt proof is not yet durable
+	ReceiptID       string
 }
 
 // doMerge performs the actual git merge operation.
@@ -974,6 +980,25 @@ func (e *Engineer) ProcessMRInfo(ctx context.Context, mr *MRInfo) ProcessResult 
 	_, _ = fmt.Fprintf(e.output, "  Worker: %s\n", mr.Worker)
 	_, _ = fmt.Fprintf(e.output, "  Source: %s\n", mr.SourceIssue)
 
+	// A previous run may have pushed successfully but failed to persist its
+	// receipt. Resume from the non-destructive MR checkpoint instead of trying
+	// to merge the source branch a second time.
+	if mr.MergeCommit != "" {
+		strategy := mr.DeliveryStrategy
+		if strategy == "" {
+			strategy = "squash"
+		}
+		receipt, err := e.persistMRDeliveryReceipt(mr, "", mr.MergeCommit, strategy, "")
+		if err != nil {
+			return ProcessResult{
+				MergeCommit:     mr.MergeCommit,
+				CleanupDeferred: true,
+				Error:           fmt.Sprintf("delivery receipt retry deferred: %v", err),
+			}
+		}
+		return ProcessResult{Success: true, MergeCommit: mr.MergeCommit, ReceiptID: receipt.ReceiptID}
+	}
+
 	// Phase 3: Check pre-verification fast-path.
 	// If the polecat already rebased onto the target and ran gates, and the target
 	// hasn't moved since, we can skip running gates entirely (~5s merge).
@@ -993,8 +1018,56 @@ func (e *Engineer) ProcessMRInfo(ctx context.Context, mr *MRInfo) ProcessResult 
 		}
 	}
 
-	// Use the shared merge logic
-	return e.doMerge(ctx, mr.Branch, mr.Target, mr.SourceIssue, skipGates)
+	// Use the shared merge logic. Receipt persistence happens after its push and
+	// before the caller is allowed to enter HandleMRInfoSuccess cleanup.
+	result := e.doMerge(ctx, mr.Branch, mr.Target, mr.SourceIssue, skipGates)
+	if !result.Success {
+		return result
+	}
+	if !e.config.AutoPush {
+		result.Success = false
+		result.CleanupDeferred = true
+		result.Error = "delivery receipt deferred: auto-push is disabled"
+		return result
+	}
+	if err := e.checkpointMRMergeCommit(mr, result.MergeCommit, "squash"); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not checkpoint pushed merge result for receipt retry: %v\n", err)
+	}
+	receipt, err := e.persistMRDeliveryReceipt(mr, "", result.MergeCommit, "squash", "")
+	if err != nil {
+		result.Success = false
+		result.CleanupDeferred = true
+		result.Error = fmt.Sprintf("delivery receipt deferred: %v", err)
+		return result
+	}
+	result.ReceiptID = receipt.ReceiptID
+	return result
+}
+
+// checkpointMRMergeCommit records only a retry hint on the still-open MR. It
+// is not delivery proof and never authorizes cleanup; the receipt producer
+// independently verifies this SHA against the remote on every retry.
+func (e *Engineer) checkpointMRMergeCommit(mr *MRInfo, mergeCommit, strategy string) error {
+	if mr == nil || mr.ID == "" || mergeCommit == "" {
+		return nil
+	}
+	mrBead, err := e.beads.Show(mr.ID)
+	if err != nil {
+		return fmt.Errorf("fetch MR %s: %w", mr.ID, err)
+	}
+	fields := beads.ParseMRFields(mrBead)
+	if fields == nil {
+		fields = &beads.MRFields{}
+	}
+	fields.MergeCommit = mergeCommit
+	fields.DeliveryStrategy = strategy
+	newDesc := beads.SetMRFields(mrBead, fields)
+	if err := e.beads.Update(mr.ID, beads.UpdateOptions{Description: &newDesc}); err != nil {
+		return fmt.Errorf("update MR %s: %w", mr.ID, err)
+	}
+	mr.MergeCommit = mergeCommit
+	mr.DeliveryStrategy = strategy
+	return nil
 }
 
 // HandleMRInfoSuccess handles a successful merge from MRInfo.
@@ -1110,6 +1183,11 @@ func (e *Engineer) HandleMRInfoSuccess(mr *MRInfo, result ProcessResult) {
 // For slot timeouts, the MR stays in queue for automatic retry without notifying polecats.
 // This enables non-blocking delegation: the queue continues to the next MR.
 func (e *Engineer) HandleMRInfoFailure(mr *MRInfo, result ProcessResult) {
+	if result.CleanupDeferred {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Merge delivered but cleanup deferred for %s: %s\n", mr.ID, result.Error)
+		_, _ = fmt.Fprintln(e.output, "[Engineer] MR, source issue, and branches remain for receipt retry")
+		return
+	}
 	// Slot timeout is transient infrastructure contention — not a build/test/conflict failure.
 	// The MR stays in queue and will be retried on the next poll cycle.
 	// No polecat notification needed since there's nothing for a worker to fix.
@@ -1367,24 +1445,29 @@ func issueToMRInfo(issue *beads.Issue, fields *beads.MRFields) *MRInfo {
 	}
 
 	return &MRInfo{
-		ID:              issue.ID,
-		Branch:          fields.Branch,
-		Target:          fields.Target,
-		SourceIssue:     fields.SourceIssue,
-		Worker:          fields.Worker,
-		Rig:             fields.Rig,
-		Title:           issue.Title,
-		Priority:        issue.Priority,
-		AgentBead:       fields.AgentBead,
-		RetryCount:      fields.RetryCount,
-		ConvoyID:        fields.ConvoyID,
-		ConvoyCreatedAt: convoyCreatedAt,
-		PreVerified:     fields.PreVerified,
-		PreVerifiedAt:   preVerifiedAt,
-		PreVerifiedBase: fields.PreVerifiedBase,
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
-		Assignee:        issue.Assignee,
+		ID:               issue.ID,
+		Branch:           fields.Branch,
+		Target:           fields.Target,
+		SourceIssue:      fields.SourceIssue,
+		CommitSHA:        fields.CommitSHA,
+		AttemptID:        fields.AttemptID,
+		BarnabyJobID:     fields.BarnabyJobID,
+		MergeCommit:      fields.MergeCommit,
+		DeliveryStrategy: fields.DeliveryStrategy,
+		Worker:           fields.Worker,
+		Rig:              fields.Rig,
+		Title:            issue.Title,
+		Priority:         issue.Priority,
+		AgentBead:        fields.AgentBead,
+		RetryCount:       fields.RetryCount,
+		ConvoyID:         fields.ConvoyID,
+		ConvoyCreatedAt:  convoyCreatedAt,
+		PreVerified:      fields.PreVerified,
+		PreVerifiedAt:    preVerifiedAt,
+		PreVerifiedBase:  fields.PreVerifiedBase,
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+		Assignee:         issue.Assignee,
 	}
 }
 

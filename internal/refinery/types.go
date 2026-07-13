@@ -24,6 +24,18 @@ type MergeRequest struct {
 	// IssueID is the beads issue being worked on.
 	IssueID string `json:"issue_id"`
 
+	// CommitSHA is the submitted source commit before refinery rewrites.
+	CommitSHA string `json:"commit_sha,omitempty"`
+
+	// AttemptID identifies the immutable submission attempt.
+	AttemptID string `json:"attempt_id,omitempty"`
+
+	// BarnabyJobID links producer proof directly when known.
+	BarnabyJobID string `json:"barnaby_job_id,omitempty"`
+
+	// RetryCount supports stable attempt identities for legacy MRs.
+	RetryCount int `json:"retry_count,omitempty"`
+
 	// SwarmID is the swarm this work belongs to (if any).
 	SwarmID string `json:"swarm_id,omitempty"`
 

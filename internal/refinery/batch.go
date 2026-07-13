@@ -206,6 +206,11 @@ func (e *Engineer) ProcessBatch(ctx context.Context, batch []*MRInfo, target str
 	if len(batch) == 0 {
 		return result
 	}
+	if len(batch) > 1 {
+		if resumed := e.resumeDeliveredBatch(batch, target); resumed != nil {
+			return resumed
+		}
+	}
 
 	// Single MR: use existing doMerge path (no batch overhead)
 	if len(batch) == 1 {
@@ -287,10 +292,58 @@ func (e *Engineer) ProcessBatch(ctx context.Context, batch []*MRInfo, target str
 	return result
 }
 
+// resumeDeliveredBatch handles a prior push whose cleanup was deferred by a
+// receipt failure. MergeCommit is only a retry checkpoint; each receipt is
+// still freshly verified against the remote before any member is cleaned up.
+// Undelivered MRs in a mixed queue remain for the next cycle.
+func (e *Engineer) resumeDeliveredBatch(batch []*MRInfo, target string) *BatchResult {
+	delivered := make([]*MRInfo, 0, len(batch))
+	for _, mr := range batch {
+		if strings.TrimSpace(mr.MergeCommit) != "" {
+			delivered = append(delivered, mr)
+		}
+	}
+	if len(delivered) == 0 {
+		return nil
+	}
+
+	result := &BatchResult{}
+	targetRef := "refs/heads/" + strings.TrimPrefix(strings.TrimPrefix(target, "refs/heads/"), "origin/")
+	observedTargetSHA, err := e.git.PushRemoteRefSHA("origin", targetRef)
+	if err != nil {
+		result.Error = fmt.Errorf("fresh remote target read for batch receipt retry: %w", err)
+		return result
+	}
+	_, _ = fmt.Fprintf(e.output, "[Batch] Resuming receipt cleanup for %d already-pushed MRs\n", len(delivered))
+	for _, mr := range delivered {
+		mr.Target = target
+		strategy := mr.DeliveryStrategy
+		if strategy == "" {
+			strategy = "batch"
+		}
+		batchID := ""
+		if strategy == "batch" {
+			batchID = fmt.Sprintf("batch:%s:%s", targetRef, mr.MergeCommit)
+		}
+		if _, receiptErr := e.persistMRDeliveryReceipt(mr, observedTargetSHA, mr.MergeCommit, strategy, batchID); receiptErr != nil {
+			result.MergeCommit = mr.MergeCommit
+			result.Error = fmt.Errorf("retry delivery receipt for %s: %w", mr.ID, receiptErr)
+			return result
+		}
+	}
+	for _, mr := range delivered {
+		e.HandleMRInfoSuccess(mr, ProcessResult{Success: true, MergeCommit: mr.MergeCommit})
+	}
+	result.Merged = delivered
+	result.MergeCommit = delivered[len(delivered)-1].MergeCommit
+	return result
+}
+
 // processSingleMR handles the degenerate case of a batch with one MR.
 func (e *Engineer) processSingleMR(ctx context.Context, mr *MRInfo, target string) *BatchResult {
 	result := &BatchResult{}
-	processResult := e.doMerge(ctx, mr.Branch, target, mr.SourceIssue)
+	mr.Target = target
+	processResult := e.ProcessMRInfo(ctx, mr)
 	if processResult.Success {
 		result.Merged = []*MRInfo{mr}
 		result.MergeCommit = processResult.MergeCommit
@@ -390,6 +443,25 @@ func (e *Engineer) fastForwardBatch(ctx context.Context, stacked []*MRInfo, targ
 		}
 		result.Error = fmt.Errorf("push to origin: %w", pushErr)
 		return result
+	}
+	targetRef := "refs/heads/" + strings.TrimPrefix(strings.TrimPrefix(target, "refs/heads/"), "origin/")
+	finalTargetSHA, verifyErr := e.git.PushRemoteRefSHA("origin", targetRef)
+	if verifyErr != nil {
+		result.MergeCommit = tipSHA
+		result.Error = fmt.Errorf("fresh remote target read after batch push: %w", verifyErr)
+		return result
+	}
+	batchID := fmt.Sprintf("batch:%s:%s", targetRef, tipSHA)
+	for _, mr := range stacked {
+		mr.Target = target
+		if checkpointErr := e.checkpointMRMergeCommit(mr, tipSHA, "batch"); checkpointErr != nil {
+			_, _ = fmt.Fprintf(e.output, "[Batch] Warning: could not checkpoint pushed merge result for %s: %v\n", mr.ID, checkpointErr)
+		}
+		if _, receiptErr := e.persistMRDeliveryReceipt(mr, finalTargetSHA, tipSHA, "batch", batchID); receiptErr != nil {
+			result.MergeCommit = tipSHA
+			result.Error = fmt.Errorf("persist delivery receipt for %s: %w", mr.ID, receiptErr)
+			return result
+		}
 	}
 
 	ids := make([]string, len(stacked))

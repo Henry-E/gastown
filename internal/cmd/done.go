@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
@@ -931,12 +932,28 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 			fmt.Printf("%s MR already exists (idempotent)\n", style.Bold.Render("✓"))
 			fmt.Printf("  MR ID: %s\n", style.Bold.Render(mrID))
 		} else {
+			attemptID := uuid.NewString()
+			barnabyJobID := strings.TrimSpace(os.Getenv("BARNABY_JOB_ID"))
+			if barnabyJobID == "" && sourceIssueForNoMerge != nil {
+				if attachment := beads.ParseAttachmentFields(sourceIssueForNoMerge); attachment != nil {
+					barnabyJobID = extractFormulaVar(attachment.FormulaVars, "barnaby_job_id")
+				}
+			}
+			if barnabyJobID != "" {
+				if _, parseErr := uuid.Parse(barnabyJobID); parseErr != nil {
+					style.PrintWarning("ignoring invalid Barnaby job id %q", barnabyJobID)
+					barnabyJobID = ""
+				}
+			}
 			// Build MR bead title and description
 			title := fmt.Sprintf("Merge: %s", issueID)
-			description := fmt.Sprintf("branch: %s\ntarget: %s\nsource_issue: %s\nrig: %s",
-				branch, target, issueID, rigName)
+			description := fmt.Sprintf("branch: %s\ntarget: %s\nsource_issue: %s\nrig: %s\nattempt_id: %s",
+				branch, target, issueID, rigName, attemptID)
 			if commitSHA != "" {
 				description += fmt.Sprintf("\ncommit_sha: %s", commitSHA)
+			}
+			if barnabyJobID != "" {
+				description += fmt.Sprintf("\nbarnaby_job_id: %s", barnabyJobID)
 			}
 			if worker != "" {
 				description += fmt.Sprintf("\nworker: %s", worker)

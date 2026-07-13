@@ -376,9 +376,9 @@ func configureRefspec(repoPath string, singleBranch bool) error {
 			}
 			return nil
 		}
-		headRef := strings.TrimSpace(headOut.String())        // e.g. "refs/heads/main"
-		branch := strings.TrimPrefix(headRef, "refs/heads/")  // e.g. "main"
-		refspec := branch + ":refs/remotes/origin/" + branch   // e.g. "main:refs/remotes/origin/main"
+		headRef := strings.TrimSpace(headOut.String())       // e.g. "refs/heads/main"
+		branch := strings.TrimPrefix(headRef, "refs/heads/") // e.g. "main"
+		refspec := branch + ":refs/remotes/origin/" + branch // e.g. "main:refs/remotes/origin/main"
 
 		fetchCmd := exec.Command("git", "--git-dir", gitDir, "fetch", "--depth", "1", "origin", refspec)
 		fetchCmd.Stderr = &stderr
@@ -537,10 +537,10 @@ func (g *Git) CommitAll(message string) error {
 
 // GitStatus represents the status of the working directory.
 type GitStatus struct {
-	Clean    bool
-	Modified []string
-	Added    []string
-	Deleted  []string
+	Clean     bool
+	Modified  []string
+	Added     []string
+	Deleted   []string
 	Untracked []string
 }
 
@@ -820,6 +820,54 @@ func (g *Git) ListPushRemoteRefs(remote, prefix string) ([]string, error) {
 	}
 	// Query the push URL directly
 	return g.ListRemoteRefs(pushURL, prefix)
+}
+
+// PushRemoteRefSHA freshly resolves one exact ref from the effective push
+// target. This is the post-push verification primitive used by delivery
+// receipts; it deliberately does not consult local remote-tracking refs.
+func (g *Git) PushRemoteRefSHA(remote, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "refs/") || strings.ContainsAny(ref, "\t\r\n ") {
+		return "", fmt.Errorf("invalid remote ref %q", ref)
+	}
+	pushURL, err := g.GetPushURL(remote)
+	if err != nil {
+		return "", fmt.Errorf("resolving push URL for %s: %w", remote, err)
+	}
+	out, err := g.run("ls-remote", "--refs", pushURL, ref)
+	if err != nil {
+		return "", fmt.Errorf("freshly reading push target ref %s: %w", ref, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == ref {
+			sha := strings.ToLower(parts[0])
+			if len(sha) != 40 && len(sha) != 64 {
+				return "", fmt.Errorf("push target ref %s returned invalid object ID %q", ref, sha)
+			}
+			return sha, nil
+		}
+	}
+	return "", fmt.Errorf("push target ref %s not found", ref)
+}
+
+// FetchPushRemoteRef fetches one ref from the effective push target into the
+// object database. It is used after a fresh ls-remote read when a caller needs
+// to prove that an earlier delivered target SHA remains an ancestor of the
+// current target. No local branch or remote-tracking ref is updated.
+func (g *Git) FetchPushRemoteRef(remote, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "refs/") || strings.ContainsAny(ref, "\t\r\n ") {
+		return fmt.Errorf("invalid remote ref %q", ref)
+	}
+	pushURL, err := g.GetPushURL(remote)
+	if err != nil {
+		return fmt.Errorf("resolving push URL for %s: %w", remote, err)
+	}
+	if _, err := g.run("fetch", "--no-tags", pushURL, ref); err != nil {
+		return fmt.Errorf("fetching push target ref %s: %w", ref, err)
+	}
+	return nil
 }
 
 // Rebase rebases the current branch onto the given ref.
@@ -1491,8 +1539,8 @@ type UncommittedWorkStatus struct {
 	StashCount            int
 	UnpushedCommits       int
 	// Details for error messages
-	ModifiedFiles   []string
-	UntrackedFiles  []string
+	ModifiedFiles  []string
+	UntrackedFiles []string
 }
 
 // Clean returns true if there is no uncommitted work.
