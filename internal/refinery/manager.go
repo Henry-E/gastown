@@ -238,6 +238,15 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 		_ = t.KillSessionWithProcesses(sessionID)
 		return fmt.Errorf("waiting for refinery to start: %w", err)
 	}
+	// Readiness text is not sufficient on its own: startup dialogs also render
+	// prompt glyphs, and an accidental "No, exit" selection can make the pane
+	// disappear immediately after the dialog handler returns. Never report a
+	// successful refinery start unless the configured agent process is still
+	// alive.
+	if !t.IsAgentAlive(sessionID) {
+		_ = t.KillSessionWithProcesses(sessionID)
+		return fmt.Errorf("waiting for refinery to start: agent exited after startup dialogs")
+	}
 
 	_ = runtime.RunStartupFallback(t, sessionID, "refinery", runtimeConfig)
 	_ = runtime.DeliverStartupPromptFallback(t, sessionID, initialPrompt, runtimeConfig, constants.ClaudeStartTimeout)

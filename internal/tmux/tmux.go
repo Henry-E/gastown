@@ -1734,10 +1734,13 @@ func (t *Tmux) AcceptStartupDialogs(session string) error {
 	return nil
 }
 
+const startupDialogCaptureLines = 100
+
 // AcceptWorkspaceTrustDialog dismisses workspace trust dialogs for supported
-// agents. Claude shows "Quick safety check"; Codex shows
-// "Do you trust the contents of this directory?". In both cases the safe
-// continue option is pre-selected, so Enter accepts the dialog.
+// agents. Claude shows "Quick safety check" and currently pre-selects
+// "No, exit", so it needs Down+Enter. Codex shows
+// "Do you trust the contents of this directory?" with the continue option
+// pre-selected, so Enter accepts it.
 //
 // Uses a polling loop instead of a single check to handle the race condition where
 // the agent hasn't rendered the dialog yet when we first check. Exits early if the
@@ -1745,7 +1748,10 @@ func (t *Tmux) AcceptStartupDialogs(session string) error {
 func (t *Tmux) AcceptWorkspaceTrustDialog(session string) error {
 	deadline := time.Now().Add(constants.DialogPollTimeout)
 	for time.Now().Before(deadline) {
-		content, err := t.CapturePane(session, 30)
+		// Current Claude layouts can place the question above more than 30
+		// lines of empty terminal space. Capture enough of the fresh pane to
+		// include the dialog instead of mistaking it for a blank startup.
+		content, err := t.CapturePane(session, startupDialogCaptureLines)
 		if err != nil {
 			time.Sleep(constants.DialogPollInterval)
 			continue
@@ -1755,7 +1761,16 @@ func (t *Tmux) AcceptWorkspaceTrustDialog(session string) error {
 		// Codex trust screens include a leading ">" banner line, so prompt
 		// detection alone would exit too early.
 		if containsWorkspaceTrustDialog(content) {
-			// Dialog found — accept it (option 1 is pre-selected, just press Enter)
+			// Claude Code 2.1.250 changed the initial selection on its trust
+			// screen to "No, exit". Move to "Yes" before accepting it. Keep
+			// Codex on the Enter-only path because its continue option remains
+			// pre-selected.
+			if claudeWorkspaceTrustDialogRequiresDown(content) {
+				if _, err := t.run("send-keys", "-t", session, "Down"); err != nil {
+					return err
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
 			if _, err := t.run("send-keys", "-t", session, "Enter"); err != nil {
 				return err
 			}
@@ -1782,6 +1797,11 @@ func containsWorkspaceTrustDialog(content string) bool {
 	return strings.Contains(content, "trust this folder") ||
 		strings.Contains(content, "Quick safety check") ||
 		strings.Contains(content, "Do you trust the contents of this directory?")
+}
+
+func claudeWorkspaceTrustDialogRequiresDown(content string) bool {
+	return strings.Contains(content, "Quick safety check") ||
+		strings.Contains(content, "trust this folder")
 }
 
 // promptSuffixes are strings that indicate a shell or agent prompt is visible.
@@ -1820,7 +1840,7 @@ func containsPromptIndicator(content string) bool {
 func (t *Tmux) AcceptBypassPermissionsWarning(session string) error {
 	deadline := time.Now().Add(constants.DialogPollTimeout)
 	for time.Now().Before(deadline) {
-		content, err := t.CapturePane(session, 30)
+		content, err := t.CapturePane(session, startupDialogCaptureLines)
 		if err != nil {
 			time.Sleep(constants.DialogPollInterval)
 			continue

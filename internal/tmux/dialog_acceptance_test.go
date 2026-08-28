@@ -223,6 +223,44 @@ func TestContainsWorkspaceTrustDialog(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkspaceTrustDialogRequiresDown(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "claude current trust screen",
+			content: "Quick safety check\nIs this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder",
+			want:    true,
+		},
+		{
+			name:    "claude legacy wording",
+			content: "Do you trust this folder?",
+			want:    true,
+		},
+		{
+			name:    "codex trust screen",
+			content: "Do you trust the contents of this directory?",
+			want:    false,
+		},
+		{
+			name:    "ordinary prompt",
+			content: "❯ ",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := claudeWorkspaceTrustDialogRequiresDown(tt.content); got != tt.want {
+				t.Fatalf("claudeWorkspaceTrustDialogRequiresDown(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDismissStartupDialogsBlind_SendsKeys verifies that the blind dismiss
 // sends keys without error on a valid session (no screen-scraping).
 func TestDismissStartupDialogsBlind_SendsKeys(t *testing.T) {
