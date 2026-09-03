@@ -1,9 +1,34 @@
 package tmux
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func writeExecutableTestScript(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fake-dialog.sh")
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatalf("write fake dialog: %v", err)
+	}
+	return path
+}
+
+func waitForPaneText(t *testing.T, tm *Tmux, sessionName, want string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := tm.CapturePaneVisible(sessionName)
+		if err == nil && strings.Contains(content, want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("pane %q never displayed %q", sessionName, want)
+}
 
 // TestAcceptWorkspaceTrustDialog_NoDialog verifies that when no trust dialog
 // is present (agent prompt visible), the function returns quickly without error.
@@ -33,32 +58,42 @@ func TestAcceptWorkspaceTrustDialog_NoDialog(t *testing.T) {
 	}
 }
 
-// TestAcceptWorkspaceTrustDialog_DetectsDialog verifies that when trust dialog
-// text appears in the pane, it is detected and accepted (Enter key sent).
-func TestAcceptWorkspaceTrustDialog_DetectsDialog(t *testing.T) {
+// TestAcceptWorkspaceTrustDialog_VerifiesClaudeSelection exercises a stateful
+// default-No dialog. The fake deliberately ignores the first Down key so the
+// handler must observe that the selection did not move and retry it.
+func TestAcceptWorkspaceTrustDialog_VerifiesClaudeSelection(t *testing.T) {
 	tm := newTestTmux(t)
 	sessionName := "gt-test-trust-dlg-" + t.Name()
 
 	_ = tm.KillSession(sessionName)
-	if err := tm.NewSession(sessionName, ""); err != nil {
-		t.Fatalf("NewSession: %v", err)
+	script := writeExecutableTestScript(t, `#!/usr/bin/env bash
+set -eu
+draw_no() {
+  printf '\033[3J\033[2J\033[HQuick safety check: Is this a project you created or one you trust?\n\n❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm\n'
+}
+draw_yes() {
+  printf '\033[3J\033[2J\033[HQuick safety check: Is this a project you created or one you trust?\n\n  No, exit\n❯ Yes, I trust this folder\n\nEnter to confirm\n'
+}
+stty raw -echo
+sleep 0.3
+draw_no
+dd bs=1 count=3 of=/dev/null 2>/dev/null
+draw_no
+dd bs=1 count=3 of=/dev/null 2>/dev/null
+draw_yes
+dd bs=1 count=1 of=/dev/null 2>/dev/null
+printf '\033[3J\033[2J\033[HFAKE_AGENT_READY\n❯ '
+sleep 30
+`)
+	if err := tm.NewSessionWithCommand(sessionName, "", script); err != nil {
+		t.Fatalf("NewSessionWithCommand: %v", err)
 	}
 	defer func() { _ = tm.KillSession(sessionName) }()
 
-	// Simulate the trust dialog by echoing its text into the pane
-	if err := tm.SendKeys(sessionName, "echo 'Quick safety check - do you trust this folder?'"); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-	// Give the echo a moment to execute
-	time.Sleep(300 * time.Millisecond)
-
-	err := tm.AcceptWorkspaceTrustDialog(sessionName)
-	if err != nil {
+	if err := tm.AcceptWorkspaceTrustDialog(sessionName); err != nil {
 		t.Fatalf("AcceptWorkspaceTrustDialog: %v", err)
 	}
-
-	// Verify that Enter was sent (we can't easily verify the exact keypress,
-	// but the function should return without error after detecting the dialog)
+	waitForPaneText(t, tm, sessionName, "FAKE_AGENT_READY")
 }
 
 // TestAcceptWorkspaceTrustDialog_DetectsCodexDialog verifies that Codex's
@@ -68,19 +103,24 @@ func TestAcceptWorkspaceTrustDialog_DetectsCodexDialog(t *testing.T) {
 	sessionName := "gt-test-trust-codex-" + t.Name()
 
 	_ = tm.KillSession(sessionName)
-	if err := tm.NewSession(sessionName, ""); err != nil {
-		t.Fatalf("NewSession: %v", err)
+	script := writeExecutableTestScript(t, `#!/usr/bin/env bash
+set -eu
+stty raw -echo
+sleep 0.3
+printf '\033[3J\033[2J\033[H> You are in /tmp/demo\nDo you trust the contents of this directory?\n'
+dd bs=1 count=1 of=/dev/null 2>/dev/null
+printf '\033[3J\033[2J\033[HFAKE_CODEX_READY\n> '
+sleep 30
+`)
+	if err := tm.NewSessionWithCommand(sessionName, "", script); err != nil {
+		t.Fatalf("NewSessionWithCommand: %v", err)
 	}
 	defer func() { _ = tm.KillSession(sessionName) }()
-
-	if err := tm.SendKeys(sessionName, "echo '> You are in /tmp/demo'; echo 'Do you trust the contents of this directory?'"); err != nil {
-		t.Fatalf("SendKeys: %v", err)
-	}
-	time.Sleep(300 * time.Millisecond)
 
 	if err := tm.AcceptWorkspaceTrustDialog(sessionName); err != nil {
 		t.Fatalf("AcceptWorkspaceTrustDialog: %v", err)
 	}
+	waitForPaneText(t, tm, sessionName, "FAKE_CODEX_READY")
 }
 
 // TestAcceptBypassPermissionsWarning_NoDialog verifies that when no bypass
@@ -223,39 +263,44 @@ func TestContainsWorkspaceTrustDialog(t *testing.T) {
 	}
 }
 
-func TestClaudeWorkspaceTrustDialogRequiresDown(t *testing.T) {
+func TestClaudeWorkspaceTrustSelection(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
-		want    bool
+		want    workspaceTrustSelection
 	}{
 		{
-			name:    "claude current trust screen",
+			name:    "claude current default no",
 			content: "Quick safety check\nIs this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder",
-			want:    true,
+			want:    workspaceTrustSelectionNo,
 		},
 		{
-			name:    "claude legacy wording",
+			name:    "claude yes selected",
+			content: "Quick safety check\nIs this a project you created or one you trust?\n  No, exit\n❯ Yes, I trust this folder",
+			want:    workspaceTrustSelectionYes,
+		},
+		{
+			name:    "claude wording without selection",
 			content: "Do you trust this folder?",
-			want:    true,
+			want:    workspaceTrustSelectionUnknown,
 		},
 		{
 			name:    "codex trust screen",
 			content: "Do you trust the contents of this directory?",
-			want:    false,
+			want:    workspaceTrustSelectionUnknown,
 		},
 		{
 			name:    "ordinary prompt",
 			content: "❯ ",
-			want:    false,
+			want:    workspaceTrustSelectionUnknown,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := claudeWorkspaceTrustDialogRequiresDown(tt.content); got != tt.want {
-				t.Fatalf("claudeWorkspaceTrustDialogRequiresDown(%q) = %v, want %v", tt.content, got, tt.want)
+			if got := claudeWorkspaceTrustSelection(tt.content); got != tt.want {
+				t.Fatalf("claudeWorkspaceTrustSelection(%q) = %v, want %v", tt.content, got, tt.want)
 			}
 		})
 	}

@@ -1734,7 +1734,7 @@ func (t *Tmux) AcceptStartupDialogs(session string) error {
 	return nil
 }
 
-const startupDialogCaptureLines = 100
+const startupDialogMaxActionRetries = 3
 
 // AcceptWorkspaceTrustDialog dismisses workspace trust dialogs for supported
 // agents. Claude shows "Quick safety check" and currently pre-selects
@@ -1747,12 +1747,21 @@ const startupDialogCaptureLines = 100
 // agent prompt appears (indicating no dialog will be shown).
 func (t *Tmux) AcceptWorkspaceTrustDialog(session string) error {
 	deadline := time.Now().Add(constants.DialogPollTimeout)
+	dialogSeen := false
+	downAttempts := 0
+	enterAttempts := 0
 	for time.Now().Before(deadline) {
-		// Current Claude layouts can place the question above more than 30
-		// lines of empty terminal space. Capture enough of the fresh pane to
-		// include the dialog instead of mistaking it for a blank startup.
-		content, err := t.CapturePane(session, startupDialogCaptureLines)
+		// Capture the entire current viewport, not scrollback. Startup dialogs
+		// can leave their text in history after dismissal; acting on that stale
+		// copy can toggle or confirm an option on the screen that follows.
+		content, err := t.CapturePaneVisible(session)
 		if err != nil {
+			if dialogSeen {
+				alive, aliveErr := t.HasSession(session)
+				if aliveErr == nil && !alive {
+					return fmt.Errorf("session exited while accepting workspace trust dialog")
+				}
+			}
 			time.Sleep(constants.DialogPollInterval)
 			continue
 		}
@@ -1761,21 +1770,42 @@ func (t *Tmux) AcceptWorkspaceTrustDialog(session string) error {
 		// Codex trust screens include a leading ">" banner line, so prompt
 		// detection alone would exit too early.
 		if containsWorkspaceTrustDialog(content) {
-			// Claude Code 2.1.250 changed the initial selection on its trust
-			// screen to "No, exit". Move to "Yes" before accepting it. Keep
-			// Codex on the Enter-only path because its continue option remains
-			// pre-selected.
-			if claudeWorkspaceTrustDialogRequiresDown(content) {
-				if _, err := t.run("send-keys", "-t", session, "Down"); err != nil {
-					return err
+			dialogSeen = true
+			if isClaudeWorkspaceTrustDialog(content) {
+				switch claudeWorkspaceTrustSelection(content) {
+				case workspaceTrustSelectionNo:
+					if downAttempts >= startupDialogMaxActionRetries {
+						return fmt.Errorf("workspace trust dialog remained on %q after %d Down attempts", workspaceTrustSelectionNo, downAttempts)
+					}
+					downAttempts++
+					if _, err := t.run("send-keys", "-t", session, "Down"); err != nil {
+						return err
+					}
+					time.Sleep(constants.DialogPollInterval)
+					continue
+				case workspaceTrustSelectionYes:
+					// The selection visibly moved to the safe continuation. Only
+					// now confirm it; if Enter is dropped, the next observation
+					// will retry without changing the selection.
+				case workspaceTrustSelectionUnknown:
+					return fmt.Errorf("Claude workspace trust dialog has no recognizable selected option")
 				}
-				time.Sleep(200 * time.Millisecond)
 			}
+
+			if enterAttempts >= startupDialogMaxActionRetries {
+				return fmt.Errorf("workspace trust dialog remained visible after %d Enter attempts", enterAttempts)
+			}
+			enterAttempts++
 			if _, err := t.run("send-keys", "-t", session, "Enter"); err != nil {
 				return err
 			}
-			// Wait for dialog to dismiss before proceeding
-			time.Sleep(500 * time.Millisecond)
+			// Do not assume the key was consumed. Re-capture the pane and
+			// return only after the dialog has actually disappeared.
+			time.Sleep(constants.DialogPollInterval)
+			continue
+		}
+
+		if dialogSeen {
 			return nil
 		}
 
@@ -1789,19 +1819,67 @@ func (t *Tmux) AcceptWorkspaceTrustDialog(session string) error {
 		time.Sleep(constants.DialogPollInterval)
 	}
 
-	// Timeout — no dialog detected, safe to proceed
+	if dialogSeen {
+		return fmt.Errorf("workspace trust dialog did not dismiss within %s", constants.DialogPollTimeout)
+	}
+
+	// Timeout with no dialog detected is safe: the caller's runtime readiness
+	// check remains the authority for whether the agent actually started.
 	return nil
+}
+
+type workspaceTrustSelection string
+
+const (
+	workspaceTrustSelectionUnknown workspaceTrustSelection = "unknown"
+	workspaceTrustSelectionNo      workspaceTrustSelection = "No, exit"
+	workspaceTrustSelectionYes     workspaceTrustSelection = "Yes, I trust this folder"
+)
+
+func isClaudeWorkspaceTrustDialog(content string) bool {
+	return strings.Contains(content, "Quick safety check") ||
+		strings.Contains(content, "trust this folder")
+}
+
+// claudeWorkspaceTrustSelection returns the option that Claude visibly marks
+// as selected. Reading the selection before acting avoids coupling startup to
+// whichever default a particular Claude release happens to use.
+func claudeWorkspaceTrustSelection(content string) workspaceTrustSelection {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "❯") &&
+			!strings.HasPrefix(trimmed, ">") &&
+			!strings.HasPrefix(trimmed, "›") {
+			continue
+		}
+
+		// tmux can wrap a selected option even when the dialog itself is
+		// visually one line (for example "❯ Y" + "es, I trust..."). Join a
+		// few continuation rows and remove layout whitespace before matching.
+		selectedRows := []string{strings.TrimSpace(strings.TrimLeft(trimmed, "❯>›"))}
+		for j := i + 1; j < len(lines) && j <= i+3; j++ {
+			continuation := strings.TrimSpace(lines[j])
+			if continuation == "" {
+				break
+			}
+			selectedRows = append(selectedRows, continuation)
+		}
+		selected := strings.ToLower(strings.Join(strings.Fields(strings.Join(selectedRows, "")), ""))
+		switch {
+		case strings.HasPrefix(selected, "no") && strings.Contains(selected, "exit"):
+			return workspaceTrustSelectionNo
+		case strings.HasPrefix(selected, "yes") && strings.Contains(selected, "trust"):
+			return workspaceTrustSelectionYes
+		}
+	}
+	return workspaceTrustSelectionUnknown
 }
 
 func containsWorkspaceTrustDialog(content string) bool {
 	return strings.Contains(content, "trust this folder") ||
 		strings.Contains(content, "Quick safety check") ||
 		strings.Contains(content, "Do you trust the contents of this directory?")
-}
-
-func claudeWorkspaceTrustDialogRequiresDown(content string) bool {
-	return strings.Contains(content, "Quick safety check") ||
-		strings.Contains(content, "trust this folder")
 }
 
 // promptSuffixes are strings that indicate a shell or agent prompt is visible.
@@ -1840,7 +1918,7 @@ func containsPromptIndicator(content string) bool {
 func (t *Tmux) AcceptBypassPermissionsWarning(session string) error {
 	deadline := time.Now().Add(constants.DialogPollTimeout)
 	for time.Now().Before(deadline) {
-		content, err := t.CapturePane(session, startupDialogCaptureLines)
+		content, err := t.CapturePaneVisible(session)
 		if err != nil {
 			time.Sleep(constants.DialogPollInterval)
 			continue
@@ -2235,6 +2313,13 @@ func (t *Tmux) FindSessionByWorkDir(targetDir string, processNames []string) ([]
 // CapturePane captures the visible content of a pane.
 func (t *Tmux) CapturePane(session string, lines int) (string, error) {
 	return t.run("capture-pane", "-p", "-t", session, "-S", fmt.Sprintf("-%d", lines))
+}
+
+// CapturePaneVisible captures only the current viewport. Unlike CapturePane,
+// it excludes scrollback, which is essential when deciding whether an
+// interactive startup dialog is still on screen.
+func (t *Tmux) CapturePaneVisible(session string) (string, error) {
+	return t.run("capture-pane", "-p", "-t", session)
 }
 
 // CapturePaneAll captures all scrollback history.
